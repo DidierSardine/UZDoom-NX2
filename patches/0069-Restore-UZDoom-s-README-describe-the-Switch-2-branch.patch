@@ -1,0 +1,169 @@
+From b078e1801d7c2e1a773c752c6927c09b3fb959c7 Mon Sep 17 00:00:00 2001
+From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
+Date: Wed, 18 Nov 2026 18:53:24 +0100
+Subject: [PATCH 69/69] Restore UZDoom's README; describe the Switch 2 branch
+ in README-SWITCH2.md
+
+RDoom NX had replaced UZDoom's README (with links to donations). The
+official README is back unchanged; the port is described, with credits and
+without donation links, in README-SWITCH2.md.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README-SWITCH2.md |  21 +++++++++
+ README.md         | 110 +++++++++++++++++++++++++++++++++++++---------
+ 2 files changed, 110 insertions(+), 21 deletions(-)
+ create mode 100644 README-SWITCH2.md
+
+diff --git a/README-SWITCH2.md b/README-SWITCH2.md
+new file mode 100644
+index 0000000000..09e115ccd2
+--- /dev/null
++++ b/README-SWITCH2.md
+@@ -0,0 +1,21 @@
++# UZDoom NX2 — engine branch
++
++Branch `uzdoom-nx2`: official **UZDoom 5.0.3** (tag `5.0.3`,
++`7910df7102033fd7754a317f3254f24101135926`) with the patches that port it to
++the **Nintendo Switch 2** under kaiHEN (homebrew `.nro`), rendered with
++**Vulkan** through OunceVK on libounce. Build, install and safety notes are in
++the main UZDoom NX2 repository (`README.md`, `docs/SECURITY.md`).
++
++The series starts with the Switch 1 port of RDoom NX by Renan (Æon)
++(github.com/aeon1911/RDoom-NX-engine, GPL-3.0), followed by the Switch 2
++commits:
++
++- libounce + OunceVK, VI2 display window, 1920×1080 swapchain;
++- SD card write firewall (`src/common/platform/posix/nx/nx2_fsguard.c`) and
++  path policy (`nx2_pathpolicy.c`): writes only in `sdmc:/switch/uzdoom-nx2`,
++  the NAND is never opened;
++- English by default, French and Portuguese for the port's screens.
++
++Stock clocks only: no overclocking code.
++
++License: GPL-3.0, like UZDoom (see `LICENSE` and `docs/licenses/`).
+diff --git a/README.md b/README.md
+index de73348118..637c5cfa0b 100644
+--- a/README.md
++++ b/README.md
+@@ -1,28 +1,96 @@
+-# RDoom NX — engine
++<div align="center">
+ 
+-This is the engine of [RDoom NX](https://github.com/aeon1911/RDoom-NX): **UZDoom
+-5.0.3** with the patches that port it to the Nintendo Switch (Atmosphère
+-homebrew `.nro`), rendered with **Vulkan** through Mesa NVK. Branch
+-`rdoom-nx`; the same series is exported as `patches/` in the main repository.
++[ <img src="branding/misc/logo-bg.svg" alt="UZDoom Icon" style="height: 8em; width: 100%" /> ][repo]
+ 
+-Made by **Renan (Æon)**. Build, install, tested mods and donations: see the
+-[main repository](https://github.com/aeon1911/RDoom-NX).
++</div>
+ 
+-What the port adds on top of UZDoom 5.0.3:
++## Welcome to UZDoom!
+ 
+-- Vulkan on the Switch (loaderless Mesa NVK, NAK thread-pointer bridge,
+-  workarounds for the Tegra X1), Vulkan only: the OpenGL/GLES backend is not
+-  built (`HAVE_OPENGL=OFF`, `HAVE_GLES2=OFF`).
+-- Per-frame performance work for handheld play at stock clocks: GPU-timed
+-  dynamic resolution, a half-resolution layer for smoke and fire, background
+-  sprite decoding, pipelines and textures prepared at level load, a pooled
+-  allocator for game objects, SD writes off the game thread.
+-- Switch platform layer (`src/common/platform/posix/nx/`): SD layout, logs,
+-  crash report, loading screen and the entry point of the RDoom launcher.
++[![Continuous Integration][badge_git]][status_git]
++[![Engine Translation status][badge_trans]][status_trans]
++[![Game Translation status][badge_trans_games]][status_trans_games]
+ 
+-Stock clocks only: no overclocking code.
++**UZDoom** is a modern, feature-rich source port for the classic game **DOOM**.
+ 
+-Built by `scripts/build.sh` in the main repository (Docker, devkitA64, libnx,
+-Mesa 26.2.4 Horizon SDK).
++A continuation of [ZDoom][zdoom] and [GZDoom][gzdoom], UZDoom enhances the original DOOM engine, providing advanced features like:
+ 
+-License: GPL-3.0, like UZDoom (see `LICENSE` and `docs/licenses/`).
++* High-Resolution Graphics
++* Dynamic lighting
++* 3D Floors
++* Extensive Modding Support
++* Support for modern OpenGL and Vulkan renderers
++
++UZDoom is **free and open-source software**, built and maintained by a dedicated community of developers and enthusiasts.
++
++## 🙏 Acknowledgments
++
++UZDoom would not be possible without the foundational work of many people. We extend our immense gratitude to:
++
++* **id Software** for creating the original DOOM and releasing its source code.
++* **Marisa Heit** for her foundational work on ZDoom, and **Christoph Oelckers** for his work on GZDoom.
++* The countless modders, mappers, and artists in the DOOM community who continue to create amazing content.
++* All the contributors who have submitted code, reported bugs, and helped improve the project over the years.
++
++The **UZDoom Icon** was designed by **Carlos "Cardboard Marty" Sanchez**, copyrighted to the UZDoom Team, and licensed under **Creative Commons BY-SA 4.0**.
++
++See the [CONTRIBUTORS](CONTRIBUTORS) file for a full list of code contributors.
++
++## 📄 Legal
++
++UZDoom is licensed under the **GNU General Public License (GPL) version 3 or any later version (GPLv3+)**.
++
++This program is distributed in the hope that it will be useful, but **WITHOUT ANY WARRANTY**. See the GNU General Public License for more details.
++
++You can view the full license text here: <https://www.gnu.org/licenses/>
++
++**Copyrights:**
++* Copyright 1993-1996 id Software
++* Copyright 1999-2016 Marisa Heit
++* Copyright 2002-2016 Christoph Oelckers
++* Copyright 2017-2025 GZDoom Maintainers and Contributors
++* Copyright 2025-2026 UZDoom Maintainers and Contributors
++
++## 🌐 Resources
++
++* [Home Page][home]
++* [Wiki][wiki]
++* [Discord Server][community]
++* [Forum][forum]
++* [Engine Translation][status_trans]
++* [Game Translation][status_trans_games]
++
++### 🛠️ Building UZDoom
++
++To build UZDoom from source, please see UZDoom's GitHub [wiki][gh_wiki] for a full list of dependencies and detailed instructions. Build For [Linux][gh_linux] / [Windows][gh_windows] / [MacOS][gh_apple]
++
++<div align="center">
++
++[ <img src="branding/UZDoom%20Banner.svg" alt="UZDoom Footer" style="height: 8em; width: 100%" /> ][repo]
++
++[<img alt="Translation status" style="width: 49%" src="https://hosted.weblate.org/widget/uzdoom/open-graph.png" />][status_trans]
++[<img alt="Translation status" style="width: 49%" src="https://hosted.weblate.org/widget/doom-engine-games/open-graph.png" />][status_trans_games]
++
++</div>
++
++[gzdoom]: https://github.com/ZDoom/gzdoom/
++[zdoom]: https://github.com/rheit/zdoom/
++
++[repo]: https://github.com/UZDoom/UZDoom/
++[home]: https://zdoom.org/
++[wiki]: https://zdoom.org/wiki/
++[forum]: https://forum.zdoom.org/
++[community]: https://dsc.gg/zdoom
++
++[gh_wiki]: https://github.com/UZDoom/UZDoom/wiki/
++[gh_linux]: https://github.com/UZDoom/UZDoom/wiki/Compilation#linux
++[gh_windows]: https://github.com/UZDoom/UZDoom/wiki/Compilation#windows
++[gh_apple]: https://github.com/UZDoom/UZDoom/wiki/Compilation#macos
++
++[status_git]: https://github.com/UZDoom/UZDoom/actions/workflows/continuous_integration.yml
++[badge_git]: https://github.com/UZDoom/UZDoom/actions/workflows/continuous_integration.yml/badge.svg
++
++[badge_trans]: https://hosted.weblate.org/widget/uzdoom/svg-badge.svg
++[status_trans]: https://hosted.weblate.org/engage/uzdoom/
++
++[badge_trans_games]: https://hosted.weblate.org/widget/doom-engine-games/svg-badge.svg
++[status_trans_games]: https://hosted.weblate.org/engage/doom-engine-games/
+-- 
+2.47.3
+

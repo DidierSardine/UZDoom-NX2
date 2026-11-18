@@ -1,7 +1,7 @@
 From 343fd5521dba87d92d9eef563758058bc304d124 Mon Sep 17 00:00:00 2001
 From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
 Date: Wed, 18 Nov 2026 18:28:21 +0100
-Subject: [PATCH 68/68] Switch 2: English by default with French and
+Subject: [PATCH 68/69] Switch 2: English by default with French and
  Portuguese, official UZDoom colours
 
 - nx2_lang: language of the port's own screens (loading screen, fatal
