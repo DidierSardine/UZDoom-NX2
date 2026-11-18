@@ -1,0 +1,53 @@
+UZDoom NX2 - installation (Nintendo Switch 2, kaiHEN)
+====================================================
+
+UZDoom NX2 est un portage non officiel d'UZDoom 5.0.3 pour Nintendo Switch 2
+sous kaiHEN, rendu en Vulkan (OunceVK), avec son propre launcher.
+
+1. Copiez le dossier "switch" de ce paquet a la RACINE de la carte SD.
+   Resultat : sdmc:/switch/uzdoom-nx2/uzdoom-nx2.nro et les .pk3 a cote.
+
+2. Placez vos IWAD dans  sdmc:/switch/uzdoom-nx2/iwads/
+   (freedoom1.wad et freedoom2.wad sont libres ; doom.wad, doom2.wad etc.
+   doivent venir de vos propres jeux. Le paquet "-Freedoom" inclut Freedoom.)
+
+3. Placez mods et packs de cartes dans  sdmc:/switch/uzdoom-nx2/mods/
+   (.pk3 .wad .zip .pk7 .deh .bex .ipk3 ; sous-dossiers autorises)
+
+4. Lancez kaiHEN, puis un jeu en maintenant R pour ouvrir hbmenu, et
+   choisissez UZDoom NX2. (Le homebrew tourne alors dans le processus du jeu,
+   avec toute sa memoire.)
+
+5. Dans le launcher : choisissez un profil (L/R), verifiez IWAD/mods, puis +.
+
+Commandes du launcher
+  A choisir   B retour   L/R changer de profil   + lancer   - modifier le profil
+  Liste des mods : A active/desactive, Y deplace (croix), X retire, + ajoute
+
+Securite de la console (NAND)
+  * Le programme n'ecrit QUE dans sdmc:/switch/uzdoom-nx2. Un pare-feu installe
+    avant toute autre initialisation refuse toute creation, ecriture,
+    suppression ou renommage ailleurs (meme sur la carte SD).
+  * Il n'ouvre jamais la NAND, les sauvegardes systeme ni les reglages : ces
+    fonctions ne sont meme pas presentes dans le binaire (verifie a chaque
+    compilation par tests/check_nand_safety.sh).
+  * Si le pare-feu ne peut pas s'installer, le programme refuse de demarrer.
+  * Les ecritures refusees sont notees dans logs/rdoom.log ("SD firewall").
+
+Dossiers (tout est dans switch/uzdoom-nx2/)
+  iwads/ mods/            vos fichiers (jamais effaces)
+  profiles/               profils (.json)
+  config/engine/          configuration du moteur par profil
+  saves/<profil>/         sauvegardes par profil
+  screenshots/            captures du jeu
+  cache/                  miniatures, cache des pipelines Vulkan
+  logs/                   rdoom.log, engine.log, engine-session.txt, crash.log
+  launcher/               images du launcher
+  backup/ export/         copies de securite et profils exportes
+
+Frequences
+  Uniquement les frequences d'origine de la console. Aucun overclock.
+
+En cas de probleme
+  Envoyez le contenu de switch/uzdoom-nx2/logs/ (crash.log, engine-session.txt,
+  rdoom.log, engine.log, engine-stderr.log).

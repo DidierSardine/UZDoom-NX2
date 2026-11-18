@@ -1,0 +1,1885 @@
+From f8d1d8c4e9a4dca260c5a6539dfccafdf298106e Mon Sep 17 00:00:00 2001
+From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
+Date: Wed, 18 Nov 2026 17:58:36 +0100
+Subject: [PATCH 67/67] Port to Nintendo Switch 2 (kaiHEN, libounce, OunceVK)
+ with an SD write firewall
+
+- Build with libounce's Switch2.cmake toolchain and headers (Cortex-A78C),
+  link OunceVK (libEGL.a: Vulkan + EGL for SDL2), Switch 2 portlibs first.
+- SD card write firewall (nx2_fsguard.c) installed in userAppInit before any
+  constructor: every create/write/truncate/delete/rename/mkdir/rmdir/chmod/
+  utimes/link outside sdmc:/switch/uzdoom-nx2 fails with EACCES; other file
+  system devices are unmounted; the program refuses to start without it.
+- Write policy (nx2_pathpolicy.c, pure C, host-tested): canonical paths,
+  '..', device prefix, ambiguous names and characters refused.
+- Video: VI2 default window (no binder queue on Switch 2), VK_NN_vi_surface
+  at 1920x1080, 60 fps at 60/120 Hz with VRR allowed.
+- volk: trampolines through vkGet*ProcAddr for extension commands OunceVK
+  does not export (debug utils, surface caps 2, acceleration structures).
+- Remove Switch 1 / emulator workarounds: TPIDR_EL0 bridge, nvhost-as
+  compatibility, binder and Mesa GL wraps.
+- Never touch sdmc:/.mesa (RDoom cleared Mesa's cache there).
+- Home sdmc:/switch/uzdoom-nx2, output uzdoom-nx2.nro, French messages and
+  loading screen.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |   4 +-
+ libraries/ZVulkan/src/volk/volk.c             | 103 ++++++
+ src/CMakeLists.txt                            |  43 +--
+ src/common/platform/posix/nx/i_nxsystem.cpp   |  53 ++-
+ src/common/platform/posix/nx/nx2_fsguard.c    | 332 ++++++++++++++++++
+ src/common/platform/posix/nx/nx2_fsguard.h    |  38 ++
+ src/common/platform/posix/nx/nx2_pathpolicy.c | 189 ++++++++++
+ src/common/platform/posix/nx/nx2_pathpolicy.h |  64 ++++
+ src/common/platform/posix/nx/nx_glthread.cpp  |  31 --
+ .../platform/posix/nx/nx_loadscreen.cpp       |  64 ++--
+ src/common/platform/posix/nx/nx_nvcompat.c    | 253 -------------
+ src/common/platform/posix/nx/nx_nvcompat.h    |  23 --
+ src/common/platform/posix/nx/nx_tls_bridge.c  |  77 ----
+ src/common/platform/posix/nx/nx_tls_bridge.h  |  15 -
+ src/common/platform/posix/nx/rdoom_nx.cpp     |  35 +-
+ src/common/platform/posix/nx/rdoom_nx.h       |   8 +-
+ .../platform/posix/nx/rdoom_version.h.in      |   4 +-
+ src/common/platform/posix/sdl/sdlglvideo.cpp  |  52 ++-
+ 18 files changed, 873 insertions(+), 515 deletions(-)
+ create mode 100644 src/common/platform/posix/nx/nx2_fsguard.c
+ create mode 100644 src/common/platform/posix/nx/nx2_fsguard.h
+ create mode 100644 src/common/platform/posix/nx/nx2_pathpolicy.c
+ create mode 100644 src/common/platform/posix/nx/nx2_pathpolicy.h
+ delete mode 100644 src/common/platform/posix/nx/nx_nvcompat.c
+ delete mode 100644 src/common/platform/posix/nx/nx_nvcompat.h
+ delete mode 100644 src/common/platform/posix/nx/nx_tls_bridge.c
+ delete mode 100644 src/common/platform/posix/nx/nx_tls_bridge.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a1805020ab..28ae25e676 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -72,7 +72,7 @@ if( NINTENDO_SWITCH )
+ 	# our gcc complains about the use of alloca, stricmp, etc without including the appropriate headers
+ 	# unless we just do this
+ 	set( CMAKE_CXX_EXTENSIONS ON )
+-	set( RDOOM_VERSION "1.1.4" )
++	set( RDOOM_VERSION "0.1.0" )	# UZDoom NX2 version
+ 	set( SWITCH_APP_VERSION "${RDOOM_VERSION}" )
+ 	# RDoom launcher sources (outside this tree so the engine stays a patch series)
+ 	set( RDOOM_LAUNCHER_DIR "${CMAKE_SOURCE_DIR}/../launcher" CACHE PATH "RDoom launcher source directory" )
+@@ -414,7 +414,7 @@ else()
+ 			set( ALL_C_FLAGS "-static-libgcc" )
+ 		endif()
+ 	elseif( NINTENDO_SWITCH )
+-		set( ALL_C_FLAGS "${ALL_C_FLAGS} -D__SWITCH__ -fno-omit-frame-pointer -I$ENV{PORTLIBS_PREFIX}/include -I$ENV{DEVKITPRO}/libnx/include" )
++		set( ALL_C_FLAGS "${ALL_C_FLAGS} -D__SWITCH__ -fno-omit-frame-pointer -I$ENV{DEVKITPRO}/portlibs/switch2/include -I$ENV{DEVKITPRO}/libounce/include -I$ENV{DEVKITPRO}/portlibs/switch/include" )
+ 		set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-class-memaccess" )
+ 	elseif( NOT MINGW AND NOT HAIKU AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "SunOS" )
+ 		# Generic GCC/Clang requires position independent executable to be enabled explicitly
+diff --git a/libraries/ZVulkan/src/volk/volk.c b/libraries/ZVulkan/src/volk/volk.c
+index a610e5741e..bc26350933 100644
+--- a/libraries/ZVulkan/src/volk/volk.c
++++ b/libraries/ZVulkan/src/volk/volk.c
+@@ -61,6 +61,109 @@ void volkLoadDeviceTable(struct VolkDeviceTable* table, VkDevice device)
+ 	(void)device;
+ }
+ 
++/*
++ * Switch 2 (OunceVK): the driver links statically and exports only Vulkan
++ * 1.0-1.4, VK_KHR_surface, VK_KHR_swapchain and VK_NN_vi_surface. Commands
++ * of other extensions are fetched with vkGet*ProcAddr; these trampolines do
++ * that on first use. A command the driver does not have fails cleanly.
++ */
++#define NX2_INSTANCE_PROC(name) \
++	static PFN_##name fn = NULL; \
++	if (!fn && s_loadedInstance) fn = (PFN_##name)vkGetInstanceProcAddr(s_loadedInstance, #name);
++#define NX2_DEVICE_PROC(name) \
++	static PFN_##name fn = NULL; \
++	if (!fn && s_loadedDevice) fn = (PFN_##name)vkGetDeviceProcAddr(s_loadedDevice, #name);
++
++VKAPI_ATTR VkResult VKAPI_CALL vkCreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
++	const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pMessenger)
++{
++	PFN_vkCreateDebugUtilsMessengerEXT fn = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
++	return fn ? fn(instance, pCreateInfo, pAllocator, pMessenger) : VK_ERROR_EXTENSION_NOT_PRESENT;
++}
++
++VKAPI_ATTR void VKAPI_CALL vkDestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT messenger, const VkAllocationCallbacks* pAllocator)
++{
++	PFN_vkDestroyDebugUtilsMessengerEXT fn = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
++	if (fn)
++		fn(instance, messenger, pAllocator);
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL vkSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsObjectNameInfoEXT* pNameInfo)
++{
++	PFN_vkSetDebugUtilsObjectNameEXT fn = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT");
++	return fn ? fn(device, pNameInfo) : VK_SUCCESS;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilities2KHR(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo,
++	VkSurfaceCapabilities2KHR* pSurfaceCapabilities)
++{
++	NX2_INSTANCE_PROC(vkGetPhysicalDeviceSurfaceCapabilities2KHR)
++	if (fn)
++		return fn(physicalDevice, pSurfaceInfo, pSurfaceCapabilities);
++	if (!pSurfaceInfo || !pSurfaceCapabilities)
++		return VK_ERROR_INITIALIZATION_FAILED;
++	return vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, pSurfaceInfo->surface, &pSurfaceCapabilities->surfaceCapabilities);
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormats2KHR(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR* pSurfaceInfo,
++	uint32_t* pSurfaceFormatCount, VkSurfaceFormat2KHR* pSurfaceFormats)
++{
++	NX2_INSTANCE_PROC(vkGetPhysicalDeviceSurfaceFormats2KHR)
++	if (fn)
++		return fn(physicalDevice, pSurfaceInfo, pSurfaceFormatCount, pSurfaceFormats);
++	if (!pSurfaceInfo || !pSurfaceFormatCount)
++		return VK_ERROR_INITIALIZATION_FAILED;
++	if (!pSurfaceFormats)
++		return vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, pSurfaceInfo->surface, pSurfaceFormatCount, NULL);
++	VkSurfaceFormatKHR formats[64];
++	uint32_t count = *pSurfaceFormatCount < 64 ? *pSurfaceFormatCount : 64;
++	VkResult r = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, pSurfaceInfo->surface, &count, formats);
++	if (r == VK_SUCCESS || r == VK_INCOMPLETE)
++	{
++		for (uint32_t i = 0; i < count; i++)
++			pSurfaceFormats[i].surfaceFormat = formats[i];
++		*pSurfaceFormatCount = count;
++	}
++	return r;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL vkCreateAccelerationStructureKHR(VkDevice device, const VkAccelerationStructureCreateInfoKHR* pCreateInfo,
++	const VkAllocationCallbacks* pAllocator, VkAccelerationStructureKHR* pAccelerationStructure)
++{
++	NX2_DEVICE_PROC(vkCreateAccelerationStructureKHR)
++	return fn ? fn(device, pCreateInfo, pAllocator, pAccelerationStructure) : VK_ERROR_EXTENSION_NOT_PRESENT;
++}
++
++VKAPI_ATTR void VKAPI_CALL vkDestroyAccelerationStructureKHR(VkDevice device, VkAccelerationStructureKHR accelerationStructure,
++	const VkAllocationCallbacks* pAllocator)
++{
++	NX2_DEVICE_PROC(vkDestroyAccelerationStructureKHR)
++	if (fn)
++		fn(device, accelerationStructure, pAllocator);
++}
++
++VKAPI_ATTR VkDeviceAddress VKAPI_CALL vkGetAccelerationStructureDeviceAddressKHR(VkDevice device, const VkAccelerationStructureDeviceAddressInfoKHR* pInfo)
++{
++	NX2_DEVICE_PROC(vkGetAccelerationStructureDeviceAddressKHR)
++	return fn ? fn(device, pInfo) : 0;
++}
++
++VKAPI_ATTR void VKAPI_CALL vkCmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t infoCount,
++	const VkAccelerationStructureBuildGeometryInfoKHR* pInfos, const VkAccelerationStructureBuildRangeInfoKHR* const* ppBuildRangeInfos)
++{
++	NX2_DEVICE_PROC(vkCmdBuildAccelerationStructuresKHR)
++	if (fn)
++		fn(commandBuffer, infoCount, pInfos, ppBuildRangeInfos);
++}
++
++VKAPI_ATTR void VKAPI_CALL vkGetAccelerationStructureBuildSizesKHR(VkDevice device, VkAccelerationStructureBuildTypeKHR buildType,
++	const VkAccelerationStructureBuildGeometryInfoKHR* pBuildInfo, const uint32_t* pMaxPrimitiveCounts, VkAccelerationStructureBuildSizesInfoKHR* pSizeInfo)
++{
++	NX2_DEVICE_PROC(vkGetAccelerationStructureBuildSizesKHR)
++	if (fn)
++		fn(device, buildType, pBuildInfo, pMaxPrimitiveCounts, pSizeInfo);
++}
++
+ #else /* !defined(__SWITCH__) */
+ 
+ #if defined(_WIN32)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 1c8efffab3..e6afe3da2e 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -438,8 +438,8 @@ set( PLAT_NX_SOURCES
+ 	common/platform/posix/nx/i_specialpaths.cpp
+ 	common/platform/posix/nx/nx_loadscreen.cpp
+ 	common/platform/posix/nx/nx_glthread.cpp
+-	common/platform/posix/nx/nx_tls_bridge.c
+-	common/platform/posix/nx/nx_nvcompat.c
++	common/platform/posix/nx/nx2_pathpolicy.c
++	common/platform/posix/nx/nx2_fsguard.c
+ 	common/platform/posix/nx/rdoom_nx.cpp )
+ set( PLAT_OSX_SOURCES
+ 	common/platform/posix/osx/iwadpicker_cocoa.mm
+@@ -1346,20 +1346,17 @@ list( REMOVE_ITEM GAME_NONPCH_SOURCES ${PCH_SOURCES} )
+ 
+ if( NINTENDO_SWITCH )
+ 	list( REMOVE_ITEM PROJECT_LIBRARIES dl )
+-	# The Mesa 26.2.4 Horizon SDK (docker/Dockerfile) provides loaderless NVK
+-	# (libvulkan.a), RDoom's only renderer. EGL/GL are linked only for a build
+-	# with the OpenGL backends on (libEGL embeds Zink, so it needs libvulkan).
+-	if( HAVE_OPENGL OR HAVE_GLES2 )
+-		set( PROJECT_LIBRARIES ${PROJECT_LIBRARIES} EGL GLESv2 glapi )
+-	endif()
+-	if( HAVE_VULKAN )
+-		set( PROJECT_LIBRARIES ${PROJECT_LIBRARIES} vulkan )
+-	endif()
++	# Switch 2 (libounce): OunceVK provides Vulkan (NVK) in libvulkan.a and
++	# EGL/GL (Zink) + Vulkan in libEGL.a. devkitPro's SDL2 refers to EGL, so
++	# the Switch 2 build links libEGL.a, which also holds the Vulkan driver.
++	# Only the Vulkan renderer is built (HAVE_OPENGL/HAVE_GLES2 OFF).
++	set( PROJECT_LIBRARIES ${PROJECT_LIBRARIES} EGL )
+ 	# libsndfile is built with Ogg/Vorbis, FLAC and Opus (docker/Dockerfile)
+ 	set( PROJECT_LIBRARIES ${PROJECT_LIBRARIES} vorbisenc vorbis FLAC opus ogg expat zstd z )
+ 	# static ZMusic pulls in libsndfile (+ codecs) and mpg123
+ 	set( ZMUSIC_LIBRARIES ${ZMUSIC_LIBRARIES} sndfile FLAC opus vorbisenc vorbis ogg mpg123 m )
+-	link_directories( $ENV{DEVKITPRO}/portlibs/switch/lib )
++	# Switch 2 portlibs (OunceVK, libsndfile) before the Switch 1 portlibs
++	link_directories( $ENV{DEVKITPRO}/portlibs/switch2/lib $ENV{DEVKITPRO}/portlibs/switch/lib )
+ 
+ 	# the RDoom launcher, linked into the same NRO
+ 	add_subdirectory( ${RDOOM_LAUNCHER_DIR} ${CMAKE_BINARY_DIR}/rdoom_launcher )
+@@ -1422,23 +1419,15 @@ endif()
+ if( NINTENDO_SWITCH )
+ 	# everything is static on Switch, so let the linker resolve the circular deps
+ 	target_link_libraries( zdoom -Wl,--start-group rdoom_launcher_ui rdoom_launcher_core ${PROJECT_LIBRARIES} lzma ${ZMUSIC_LIBRARIES} absl::base absl::flat_hash_map absl::strings absl::hash nx -Wl,--end-group )
+-	# nx_tls_bridge.c: TPIDR_EL0 for the Rust code in the Mesa SDK.
+-	# nx_nvcompat.c: emulator quirk in fixed GPU VA reservations.
++	# nx_objpool.cpp: small allocations and script objects from a pool
+ 	target_link_options( zdoom PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free" "-Wl,--wrap=realloc" "-Wl,--wrap=calloc" "-Wl,--wrap=malloc_usable_size" )
+-	target_link_options( zdoom PRIVATE "-Wl,--wrap=threadCreate"
+-		"-Wl,--wrap=nvioctlNvhostAsGpu_AllocSpace" "-Wl,--wrap=nvioctlNvhostAsGpu_FreeSpace" "-Wl,--wrap=nvioctlNvhostAsGpu_InitializeEx"
+-		"-pthread" )
++	# nx_glthread.cpp: SDL audio threads off the game's core
++	target_link_options( zdoom PRIVATE "-Wl,--wrap=pthread_create" "-pthread" "-Wl,--gc-sections" )
+ 	option( RDOOM_VK_TRACE "Log recorded Vulkan commands per submit (diagnostic)" OFF )
+ 	if( RDOOM_VK_TRACE )
+ 		target_sources( zdoom PRIVATE common/platform/posix/nx/nx_vktrace.cpp )
+ 		target_link_options( zdoom PRIVATE "-Wl,--wrap=vkCmdFillBuffer" "-Wl,--wrap=vkCmdUpdateBuffer" "-Wl,--wrap=vkCmdCopyBuffer" "-Wl,--wrap=vkCmdCopyBufferToImage" "-Wl,--wrap=vkCmdCopyImageToBuffer" "-Wl,--wrap=vkCmdCopyImage" "-Wl,--wrap=vkCmdBlitImage" "-Wl,--wrap=vkCmdClearColorImage" "-Wl,--wrap=vkCmdClearDepthStencilImage" "-Wl,--wrap=vkCmdClearAttachments" "-Wl,--wrap=vkCmdResetQueryPool" "-Wl,--wrap=vkCmdDispatch" "-Wl,--wrap=vkCmdResolveImage" "-Wl,--wrap=vkCmdDraw" "-Wl,--wrap=vkCmdDrawIndexed" "-Wl,--wrap=vkCmdBeginRenderPass" "-Wl,--wrap=vkCmdPipelineBarrier" "-Wl,--wrap=vkQueueSubmit" )
+ 	endif()
+-	if( HAVE_VULKAN )
+-		# volk does not load the ICD entry points on Switch; keep them linked
+-		target_link_options( zdoom PRIVATE "-Wl,-u,vk_icdGetInstanceProcAddr" "-Wl,-u,vk_icdNegotiateLoaderICDInterfaceVersion" )
+-	endif()
+-	# Mesa glthread support (nx_glthread.cpp): count driver-thread syncs, big stack for the driver thread
+-	target_link_options( zdoom PRIVATE "-Wl,--wrap=_mesa_glthread_finish_before" "-Wl,--wrap=pthread_create" "-Wl,--wrap=nwindowDequeueBuffer" "-Wl,--wrap=nwindowQueueBuffer" "-Wl,--wrap=_util_queue_fence_wait" )
+ else()
+ 	target_link_libraries( zdoom ${PROJECT_LIBRARIES} lzma ${ZMUSIC_LIBRARIES} absl::base absl::flat_hash_map absl::strings absl::hash )
+ endif()
+@@ -1561,11 +1550,9 @@ endif()
+ 
+ if( NINTENDO_SWITCH )
+ 	add_custom_command( TARGET zdoom POST_BUILD
+-		COMMAND nacptool --create "RDoom" "RDoom - UZDoom port" "${SWITCH_APP_VERSION}" ${CMAKE_BINARY_DIR}/RDoom.nacp
+-		COMMAND ${CMAKE_STRIP} -o ${CMAKE_BINARY_DIR}/RDoom_stripped.elf $<TARGET_FILE:zdoom>
+-		# CHKFEAT is a NOP on the Switch's CPU; make that explicit for emulators
+-		COMMAND python3 ${CMAKE_SOURCE_DIR}/../scripts/patch_chkfeat.py ${CMAKE_BINARY_DIR}/RDoom_stripped.elf
+-		COMMAND elf2nro ${CMAKE_BINARY_DIR}/RDoom_stripped.elf ${CMAKE_BINARY_DIR}/RDoom.nro --icon=${RDOOM_ICON} --nacp=${CMAKE_BINARY_DIR}/RDoom.nacp )
++		COMMAND nacptool --create "UZDoom NX2" "UZDoom NX2 contributors" "${SWITCH_APP_VERSION}" ${CMAKE_BINARY_DIR}/uzdoom-nx2.nacp
++		COMMAND ${CMAKE_STRIP} -o ${CMAKE_BINARY_DIR}/uzdoom-nx2_stripped.elf $<TARGET_FILE:zdoom>
++		COMMAND elf2nro ${CMAKE_BINARY_DIR}/uzdoom-nx2_stripped.elf ${CMAKE_BINARY_DIR}/uzdoom-nx2.nro --icon=${RDOOM_ICON} --nacp=${CMAKE_BINARY_DIR}/uzdoom-nx2.nacp )
+ endif()
+ 
+ add_custom_command(TARGET zdoom POST_BUILD
+diff --git a/src/common/platform/posix/nx/i_nxsystem.cpp b/src/common/platform/posix/nx/i_nxsystem.cpp
+index 42b2401193..102c97f571 100644
+--- a/src/common/platform/posix/nx/i_nxsystem.cpp
++++ b/src/common/platform/posix/nx/i_nxsystem.cpp
+@@ -36,8 +36,7 @@
+ #include <unistd.h>
+ #include <switch.h>
+ #include "nx_loadscreen.h"
+-#include "nx_nvcompat.h"
+-#include "nx_tls_bridge.h"
++#include "nx2_fsguard.h"
+ #include "rdoom_nx.h"
+ 
+ void NX_AudioAfterLoadScreen();
+@@ -47,12 +46,17 @@ void NX_StartHangWatch();
+ static int nxlink_sock = -1;
+ #endif
+ 
++static bool g_fsGuardFailed = false;
++
++// Runs at the end of libounce's __appInit, after the SD card is mounted and
++// before any global constructor: no file is opened before the SD card
++// firewall is in place (see nx2_fsguard.c).
+ extern "C" void userAppInit(void)
+ {
+-	// Rust code inside the Mesa SDK reads TPIDR_EL0 (see nx_tls_bridge.c)
+-	NX_TlsBridgeInit();
+-	socketInitializeDefault();
++	if (NX2_FsGuardInstall() != 0)
++		g_fsGuardFailed = true;
+ #ifdef _DEBUG
++	socketInitializeDefault();
+ 	nxlink_sock = nxlinkStdio();
+ #endif
+ }
+@@ -62,8 +66,8 @@ extern "C" void userAppExit(void)
+ #ifdef _DEBUG
+ 	if (nxlink_sock >= 0)
+ 		close(nxlink_sock);
+-#endif
+ 	socketExit();
++#endif
+ }
+ 
+ bool I_OnScreenKeyboard(const char *hint, char *out, int outlen)
+@@ -100,8 +104,8 @@ void I_NXShowFatalError(const char *title, const char *message)
+ 
+ 	printf("\x1b[31;1m%s\x1b[0m\n\n", title);
+ 	printf("%s\n\n", message);
+-	printf("\x1b[33mThis message was also saved to switch/rdoom/logs/error.log.\x1b[0m\n\n");
+-	printf("Press + to exit.\n");
++	printf("\x1b[33mCe message est aussi dans switch/uzdoom-nx2/logs/error.log.\x1b[0m\n\n");
++	printf("Appuyez sur + pour quitter.\n");
+ 	consoleUpdate(NULL);
+ 
+ 	while (appletMainLoop())
+@@ -204,7 +208,7 @@ static void CrashStackScan(u64 sp)
+ extern "C" void __libnx_exception_handler(ThreadExceptionDump *ctx)
+ {
+ 	crashlen = 0;
+-	CrashPrintf("RDoom (UZDoom 5.0.3) crash report\nCPU exception, error_desc=0x%x esr=0x%x far=0x%lx\n",
++	CrashPrintf("UZDoom NX2 (UZDoom 5.0.3, Switch 2) crash report\nCPU exception, error_desc=0x%x esr=0x%x far=0x%lx\n",
+ 		ctx->error_desc, ctx->esr, (unsigned long)ctx->far.x);
+ 	CrashPrintf("module base: 0x%lx\n", (unsigned long)ModBase());
+ 	CrashPrintf("pc: 0x%lx (+0x%lx)\nlr: 0x%lx (+0x%lx)\nsp: 0x%lx fp: 0x%lx\n",
+@@ -235,7 +239,7 @@ extern "C" void __libnx_exception_handler(ThreadExceptionDump *ctx)
+ static void I_NXTerminate()
+ {
+ 	crashlen = 0;
+-	CrashPrintf("RDoom (UZDoom 5.0.3) crash report\nstd::terminate called\n");
++	CrashPrintf("UZDoom NX2 (UZDoom 5.0.3, Switch 2) crash report\nstd::terminate called\n");
+ 	CrashPrintf("module base: 0x%lx\n", (unsigned long)ModBase());
+ 	if (auto eptr = std::current_exception())
+ 	{
+@@ -372,13 +376,36 @@ static void NXExpandResponseFiles(int &argc, char **&argv)
+ 
+ int I_NXRunWithBigStack(int (*fn)(int, char **), int argc, char **argv)
+ {
++	// Without the SD card firewall nothing is written and nothing starts.
++	if (g_fsGuardFailed || !NX2_FsGuardActive())
++	{
++		char msg[700];
++		snprintf(msg, sizeof(msg),
++			"UZDoom NX2 n'a pas pu mettre en place sa protection d'ecriture\n"
++			"(tout est limite a sdmc:/switch/uzdoom-nx2). Rien n'a ete ecrit.\n\n"
++			"Verifiez que la carte SD est presente et que le dossier\n"
++			"switch/uzdoom-nx2 existe (copiez-y uzdoom-nx2.nro).\n\n"
++			"Detail : %s", NX2_FsGuardInstallReport());
++		consoleInit(NULL);
++		padConfigureInput(1, HidNpadStyleSet_NpadStandard);
++		PadState pad;
++		padInitializeDefault(&pad);
++		printf("\x1b[31;1mUZDoom NX2 : demarrage impossible\x1b[0m\n\n%s\n\nAppuyez sur + pour quitter.\n", msg);
++		consoleUpdate(NULL);
++		while (appletMainLoop())
++		{
++			padUpdate(&pad);
++			if (padGetButtonsDown(&pad) & (HidNpadButton_Plus | HidNpadButton_Minus))
++				break;
++			consoleUpdate(NULL);
++		}
++		consoleExit(NULL);
++		return 1;
++	}
+ 	// global constructors have run by now (userAppInit is too early for this)
+ 	RDoom_NXEarlyInit();
+ 	std::set_terminate(I_NXTerminate);
+ 	FindModuleRange();
+-	// before any GPU use: emulators may answer fixed GPU VA reservations
+-	// differently from the console (see nx_nvcompat.c)
+-	NX_NvCompatInit();
+ 	NXExpandResponseFiles(argc, argv);
+ 	if (!RDoom_NXRunLauncher(argc, argv, argc, argv))
+ 	{
+diff --git a/src/common/platform/posix/nx/nx2_fsguard.c b/src/common/platform/posix/nx/nx2_fsguard.c
+new file mode 100644
+index 0000000000..885fed0cf6
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_fsguard.c
+@@ -0,0 +1,332 @@
++/*
++** nx2_fsguard.c
++** UZDoom NX2: SD card write firewall.
++**
++** kaiHEN gives homebrew an unrestricted FS session: a program could open the
++** system NAND and damage it. UZDoom NX2 protects the console in three layers:
++**
++**   1. It never opens anything but the SD card. The final ELF is checked for
++**      every libnx entry point that reaches NAND, save data, system settings
++**      or another storage (tests/check_nand_safety.sh): the build fails if one
++**      is linked.
++**   2. Every file system call of the C library - from the engine, the
++**      launcher, ZMusic, SDL, the Vulkan driver, any library - goes through
++**      newlib's device table. This file replaces the "sdmc" entry of that
++**      table with a copy whose write operations first ask nx2_pathpolicy.c:
++**      only paths inside sdmc:/switch/uzdoom-nx2 may be created, written,
++**      truncated, removed, renamed or have their attributes changed. Reads
++**      are not restricted (IWADs and mods may be anywhere on the card).
++**   3. All other file system devices are unmounted, so there is no other
++**      device a path could name.
++**
++** A refused call fails with EACCES and is recorded for the log; the program
++** carries on.
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++
++#ifdef __SWITCH__
++
++#include "nx2_fsguard.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/iosupport.h>
++#include <switch.h>
++
++static devoptab_t g_guarded;              // our copy of the sdmc entry
++static const devoptab_t *g_original;      // fsdev's own entry (its functions do the work)
++static int g_index = -1;                  // its slot in devoptab_list
++static int g_active = 0;
++static unsigned g_reinstalls = 0;
++static char g_report[512];
++
++// Working directory of the sdmc device as fsdev resolves it ("/a/b/").
++static Mutex g_cwdMutex;
++static char g_cwd[NX2_PATH_MAX + 2] = "";
++
++// Refused writes, for the log.
++#define NX2_DENIAL_KEEP 16
++static Mutex g_denyMutex;
++static unsigned g_denials = 0;
++static char g_denied[NX2_DENIAL_KEEP][160];
++
++static void NX2_GetCwd(char *out, size_t size)
++{
++	mutexLock(&g_cwdMutex);
++	strncpy(out, g_cwd, size - 1);
++	out[size - 1] = 0;
++	mutexUnlock(&g_cwdMutex);
++}
++
++static void NX2_RecordDenial(const char *op, const char *path, NX2PathVerdict v)
++{
++	mutexLock(&g_denyMutex);
++	char *slot = g_denied[g_denials % NX2_DENIAL_KEEP];
++	snprintf(slot, sizeof(g_denied[0]), "%s '%.100s': %s", op, path ? path : "(null)", NX2_PathVerdictName(v));
++	g_denials++;
++	mutexUnlock(&g_denyMutex);
++}
++
++// 0 when 'path' may be changed by 'op'; otherwise sets errno and returns -1.
++static int NX2_Allow(struct _reent *r, const char *opName, const char *path, NX2PathOp op)
++{
++	char cwd[NX2_PATH_MAX + 2];
++	NX2_GetCwd(cwd, sizeof(cwd));
++	NX2PathVerdict v = NX2_PathCheck(cwd[0] ? cwd : NULL, path, op, NULL);
++	if (v == NX2_PATH_OK)
++		return 0;
++	NX2_RecordDenial(opName, path, v);
++	r->_errno = EACCES;
++	return -1;
++}
++
++// ---------------------------------------------------------------------------
++// guarded operations
++// ---------------------------------------------------------------------------
++
++static int G_open(struct _reent *r, void *fileStruct, const char *path, int flags, int mode)
++{
++	const int writes = (flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND));
++	if (writes && NX2_Allow(r, "open-write", path, NX2_OP_WRITE_FILE))
++		return -1;
++	return g_original->open_r(r, fileStruct, path, flags, mode);
++}
++
++static int G_link(struct _reent *r, const char *existing, const char *newLink)
++{
++	if (NX2_Allow(r, "link", existing, NX2_OP_WRITE_FILE) || NX2_Allow(r, "link", newLink, NX2_OP_WRITE_FILE))
++		return -1;
++	if (!g_original->link_r) { r->_errno = ENOSYS; return -1; }
++	return g_original->link_r(r, existing, newLink);
++}
++
++static int G_unlink(struct _reent *r, const char *name)
++{
++	if (NX2_Allow(r, "unlink", name, NX2_OP_WRITE_FILE))
++		return -1;
++	return g_original->unlink_r(r, name);
++}
++
++static int G_chdir(struct _reent *r, const char *name)
++{
++	char canon[NX2_PATH_MAX + 1];
++	char cwd[NX2_PATH_MAX + 2];
++	NX2_GetCwd(cwd, sizeof(cwd));
++	// only inside the sandbox: relative paths then always start there
++	NX2PathVerdict v = NX2_PathCheck(cwd[0] ? cwd : NULL, name, NX2_OP_CHDIR, canon);
++	if (v != NX2_PATH_OK)
++	{
++		NX2_RecordDenial("chdir", name, v);
++		r->_errno = EACCES;
++		return -1;
++	}
++	mutexLock(&g_cwdMutex);
++	int ret = g_original->chdir_r(r, canon);
++	if (ret == 0)
++	{
++		size_t n = strlen(canon);
++		memcpy(g_cwd, canon, n + 1);
++		if (n == 0 || g_cwd[n - 1] != '/')
++		{
++			g_cwd[n] = '/';
++			g_cwd[n + 1] = 0;
++		}
++	}
++	mutexUnlock(&g_cwdMutex);
++	return ret;
++}
++
++static int G_rename(struct _reent *r, const char *oldName, const char *newName)
++{
++	if (NX2_Allow(r, "rename-from", oldName, NX2_OP_WRITE_FILE) || NX2_Allow(r, "rename-to", newName, NX2_OP_WRITE_FILE))
++		return -1;
++	return g_original->rename_r(r, oldName, newName);
++}
++
++static int G_mkdir(struct _reent *r, const char *path, int mode)
++{
++	if (NX2_Allow(r, "mkdir", path, NX2_OP_MAKE_DIR))
++		return -1;
++	return g_original->mkdir_r(r, path, mode);
++}
++
++static int G_rmdir(struct _reent *r, const char *name)
++{
++	if (NX2_Allow(r, "rmdir", name, NX2_OP_REMOVE_DIR))
++		return -1;
++	return g_original->rmdir_r(r, name);
++}
++
++static int G_chmod(struct _reent *r, const char *path, mode_t mode)
++{
++	if (NX2_Allow(r, "chmod", path, NX2_OP_WRITE_FILE))
++		return -1;
++	if (!g_original->chmod_r) { r->_errno = ENOSYS; return -1; }
++	return g_original->chmod_r(r, path, mode);
++}
++
++static int G_utimes(struct _reent *r, const char *path, const struct timeval times[2])
++{
++	if (NX2_Allow(r, "utimes", path, NX2_OP_WRITE_FILE))
++		return -1;
++	if (!g_original->utimes_r) { r->_errno = ENOSYS; return -1; }
++	return g_original->utimes_r(r, path, times);
++}
++
++static int G_symlink(struct _reent *r, const char *target, const char *linkpath)
++{
++	if (NX2_Allow(r, "symlink", linkpath, NX2_OP_WRITE_FILE))
++		return -1;
++	if (!g_original->symlink_r) { r->_errno = ENOSYS; return -1; }
++	return g_original->symlink_r(r, target, linkpath);
++}
++
++// ---------------------------------------------------------------------------
++// installation
++// ---------------------------------------------------------------------------
++
++static void NX2_Report(const char *fmt, const char *arg)
++{
++	size_t n = strlen(g_report);
++	if (n < sizeof(g_report) - 1)
++		snprintf(g_report + n, sizeof(g_report) - n, fmt, arg);
++}
++
++// Devices that are not file systems (C streams, console, sockets) and the
++// two file systems the program may use. Anything else is unmounted.
++static int NX2_IsExpectedDevice(const char *name)
++{
++	static const char *const ok[] = { "stdnull", "stdin", "stdout", "stderr", "con", "soc", "sdmc", "romfs" };
++	for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
++		if (!strcmp(name, ok[i]))
++			return 1;
++	return 0;
++}
++
++static int NX2_Apply(void)
++{
++	int idx = AddDevice(&g_guarded);	// replaces the entry of the same name, in place
++	if (idx < 0 || devoptab_list[idx] != &g_guarded)
++		return -1;
++	g_index = idx;
++	setDefaultDevice(idx);
++	return 0;
++}
++
++__attribute__((noinline, used)) int NX2_FsGuardInstall(void)
++{
++	mutexInit(&g_cwdMutex);
++	mutexInit(&g_denyMutex);
++	g_report[0] = 0;
++
++	const int sdIdx = FindDevice("sdmc:");
++	if (sdIdx < 0)
++	{
++		NX2_Report("%s", "no SD card device; ");
++		return -1;
++	}
++	g_original = devoptab_list[sdIdx];
++	if (!g_original || !g_original->open_r || !g_original->chdir_r || !g_original->mkdir_r)
++	{
++		NX2_Report("%s", "SD card device incomplete; ");
++		return -1;
++	}
++
++	g_guarded = *g_original;	// same name, same deviceData: fsdev still does the work
++	g_guarded.open_r = G_open;
++	g_guarded.link_r = G_link;
++	g_guarded.unlink_r = G_unlink;
++	g_guarded.chdir_r = G_chdir;
++	g_guarded.rename_r = G_rename;
++	g_guarded.mkdir_r = G_mkdir;
++	g_guarded.rmdir_r = G_rmdir;
++	g_guarded.chmod_r = G_chmod;
++	g_guarded.utimes_r = G_utimes;
++	g_guarded.symlink_r = G_symlink;
++	// fd-based calls (write, ftruncate, fchmod, fsync) can only reach files
++	// that G_open opened for writing; fsdev refuses writes to read-only fds.
++
++	// Create and enter the sandbox through fsdev directly, before the
++	// firewall knows the working directory. /switch itself is never created:
++	// the .nro lives in it.
++	struct _reent *r = _REENT;
++	void *saved = r->deviceData;
++	r->deviceData = g_original->deviceData;
++	int mk = g_original->mkdir_r(r, NX2_SANDBOX_ROOT, 0777);
++	int mkErr = r->_errno;
++	int cd = g_original->chdir_r(r, NX2_SANDBOX_ROOT);
++	r->deviceData = saved;
++	if (cd != 0)
++	{
++		NX2_Report("%s", mk != 0 && mkErr != EEXIST ? "cannot create " NX2_SANDBOX_ROOT "; " : "cannot enter " NX2_SANDBOX_ROOT "; ");
++		return -1;
++	}
++	strcpy(g_cwd, NX2_SANDBOX_DIR "/");
++
++	if (NX2_Apply() != 0)
++	{
++		NX2_Report("%s", "cannot replace the SD card device; ");
++		return -1;
++	}
++
++	// unmount every other file system device
++	for (int i = 0; i < STD_MAX; i++)
++	{
++		const devoptab_t *d = devoptab_list[i];
++		if (!d || !d->name || NX2_IsExpectedDevice(d->name))
++			continue;
++		char name[40];
++		snprintf(name, sizeof(name), "%.32s:", d->name);
++		NX2_Report("unmounted device %s; ", name);
++		RemoveDevice(name);
++	}
++
++	g_active = 1;
++	NX2_Report("%s", "firewall on sdmc: writes limited to " NX2_SANDBOX_ROOT);
++	return 0;
++}
++
++int NX2_FsGuardActive(void)
++{
++	if (!g_active)
++		return 0;
++	if (g_index >= 0 && devoptab_list[g_index] == &g_guarded)
++		return 1;
++	// something re-registered the SD card: put the firewall back
++	if (NX2_Apply() != 0)
++	{
++		g_active = 0;
++		return 0;
++	}
++	g_reinstalls++;
++	return 1;
++}
++
++unsigned NX2_FsGuardReinstalls(void) { return g_reinstalls; }
++const char *NX2_FsGuardInstallReport(void) { return g_report; }
++
++unsigned NX2_FsGuardDenials(void)
++{
++	return g_denials;
++}
++
++int NX2_FsGuardDenial(unsigned index, char *buf, size_t size)
++{
++	int ok = 0;
++	mutexLock(&g_denyMutex);
++	const unsigned kept = g_denials < NX2_DENIAL_KEEP ? g_denials : NX2_DENIAL_KEEP;
++	if (index < kept && size > 0)
++	{
++		const unsigned first = g_denials - kept;
++		strncpy(buf, g_denied[(first + index) % NX2_DENIAL_KEEP], size - 1);
++		buf[size - 1] = 0;
++		ok = 1;
++	}
++	mutexUnlock(&g_denyMutex);
++	return ok;
++}
++
++#endif // __SWITCH__
+diff --git a/src/common/platform/posix/nx/nx2_fsguard.h b/src/common/platform/posix/nx/nx2_fsguard.h
+new file mode 100644
+index 0000000000..164a80a80d
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_fsguard.h
+@@ -0,0 +1,38 @@
++/*
++** nx2_fsguard.h
++** UZDoom NX2: SD card write firewall (see nx2_fsguard.c).
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++#pragma once
++
++#include <stddef.h>
++#include "nx2_pathpolicy.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// Installs the firewall on the "sdmc" device, creates and enters the sandbox
++// directory and unmounts every other file system device. Called from
++// userAppInit, before any constructor runs. Returns 0, or -1 when the
++// sandbox could not be set up: the program must then not start.
++int NX2_FsGuardInstall(void);
++
++// True once NX2_FsGuardInstall succeeded and the firewall is still in place.
++// If something replaced the sdmc device in the meantime, the firewall is put
++// back (counted in NX2_FsGuardReinstalls) and the result is still true.
++int NX2_FsGuardActive(void);
++unsigned NX2_FsGuardReinstalls(void);
++
++// What happened at install time, for the log (static text).
++const char *NX2_FsGuardInstallReport(void);
++
++// Writes that were refused: their count, and the latest ones (index 0 =
++// oldest of those kept). Returns 0 when 'index' is out of range.
++unsigned NX2_FsGuardDenials(void);
++int NX2_FsGuardDenial(unsigned index, char *buf, size_t size);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/common/platform/posix/nx/nx2_pathpolicy.c b/src/common/platform/posix/nx/nx2_pathpolicy.c
+new file mode 100644
+index 0000000000..082276750d
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_pathpolicy.c
+@@ -0,0 +1,189 @@
++/*
++** nx2_pathpolicy.c
++** UZDoom NX2: the write policy of the SD card sandbox. See nx2_pathpolicy.h.
++**
++** The policy is deliberately stricter than the file system: a path it is not
++** sure about is refused. A refusal only makes one write fail (the caller sees
++** EACCES); an accepted path outside the sandbox could damage the user's data.
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++
++#include "nx2_pathpolicy.h"
++
++#include <string.h>
++
++static int NX2_IsBadChar(unsigned char c)
++{
++	if (c < 0x20 || c == 0x7f)
++		return 1;
++	switch (c)
++	{
++	case '\\': case ':': case '*': case '?': case '<': case '>': case '|': case '"':
++		return 1;
++	default:
++		return 0;
++	}
++}
++
++static char NX2_Lower(char c)
++{
++	return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
++}
++
++// Equal ignoring ASCII case (the SD card's FAT/exFAT is case-insensitive).
++static int NX2_EqualNoCase(const char *a, size_t alen, const char *b)
++{
++	size_t blen = strlen(b);
++	if (alen != blen)
++		return 0;
++	for (size_t i = 0; i < alen; i++)
++		if (NX2_Lower(a[i]) != NX2_Lower(b[i]))
++			return 0;
++	return 1;
++}
++
++// Appends the components of 'p' (no device prefix) to the canonical path in
++// 'out' (length *len, "" for the root). Handles "." and "..".
++static NX2PathVerdict NX2_AppendComponents(const char *p, char *out, size_t outSize, size_t *len)
++{
++	while (*p)
++	{
++		while (*p == '/')
++			p++;
++		if (!*p)
++			break;
++		const char *start = p;
++		while (*p && *p != '/')
++		{
++			if (NX2_IsBadChar((unsigned char)*p))
++				return NX2_PATH_BAD_CHAR;
++			p++;
++		}
++		const size_t n = (size_t)(p - start);
++
++		if (n == 1 && start[0] == '.')
++			continue;
++		if (n == 2 && start[0] == '.' && start[1] == '.')
++		{
++			if (*len == 0)
++				return NX2_PATH_ESCAPES_ROOT;
++			while (*len > 0 && out[*len - 1] != '/')
++				(*len)--;
++			// drop the separator too ("/a/b" -> "/a", "/a" -> "")
++			if (*len > 0)
++				(*len)--;
++			out[*len] = 0;
++			continue;
++		}
++
++		// "...", ". ", ".. " and names ending in '.' or ' ': file systems
++		// may trim or reinterpret them, so they are never written.
++		int onlyDots = 1;
++		for (size_t i = 0; i < n; i++)
++			if (start[i] != '.' && start[i] != ' ')
++				onlyDots = 0;
++		if (onlyDots || start[n - 1] == '.' || start[n - 1] == ' ')
++			return NX2_PATH_BAD_COMPONENT;
++
++		if (*len + 1 + n >= outSize || *len + 1 + n > NX2_PATH_MAX)
++			return NX2_PATH_TOO_LONG;
++		out[(*len)++] = '/';
++		memcpy(out + *len, start, n);
++		*len += n;
++		out[*len] = 0;
++	}
++	return NX2_PATH_OK;
++}
++
++NX2PathVerdict NX2_PathCanonical(const char *cwd, const char *path, char *out, size_t outSize)
++{
++	if (!out || outSize < 2)
++		return NX2_PATH_TOO_LONG;
++	out[0] = 0;
++	if (!path || !*path)
++		return NX2_PATH_EMPTY;
++	if (strlen(path) > NX2_PATH_MAX)
++		return NX2_PATH_TOO_LONG;
++
++	// device prefix: only "sdmc:", and only one ':' in the whole path
++	const char *colon = strchr(path, ':');
++	const char *rest = path;
++	if (colon)
++	{
++		if (strchr(colon + 1, ':'))
++			return NX2_PATH_BAD_DEVICE;
++		if ((size_t)(colon - path) != 4 || strncmp(path, "sdmc", 4) != 0)
++			return NX2_PATH_BAD_DEVICE;
++		rest = colon + 1;
++	}
++
++	size_t len = 0;
++	NX2PathVerdict v;
++	if (rest[0] != '/')
++	{
++		// relative: resolved against the working directory, as fsdev does
++		if (!cwd || cwd[0] != '/')
++			return NX2_PATH_BAD_CWD;
++		v = NX2_AppendComponents(cwd, out, outSize, &len);
++		if (v != NX2_PATH_OK)
++			return NX2_PATH_BAD_CWD;
++	}
++	v = NX2_AppendComponents(rest, out, outSize, &len);
++	if (v != NX2_PATH_OK)
++	{
++		out[0] = 0;
++		return v;
++	}
++	if (len == 0)
++	{
++		out[0] = '/';
++		out[1] = 0;
++	}
++	return NX2_PATH_OK;
++}
++
++__attribute__((noinline, used)) NX2PathVerdict NX2_PathCheck(const char *cwd, const char *path, NX2PathOp op, char *canon)
++{
++	char local[NX2_PATH_MAX + 1];
++	char *c = canon ? canon : local;
++	NX2PathVerdict v = NX2_PathCanonical(cwd, path, c, NX2_PATH_MAX + 1);
++	if (v != NX2_PATH_OK)
++		return v;
++
++	// the first two components must be "switch" and "uzdoom-nx2"
++	const char *p = c + 1;
++	const char *s1 = strchr(p, '/');
++	if (!s1 || !NX2_EqualNoCase(p, (size_t)(s1 - p), "switch"))
++		return NX2_PATH_OUTSIDE;
++	const char *p2 = s1 + 1;
++	const char *s2 = strchr(p2, '/');
++	const size_t n2 = s2 ? (size_t)(s2 - p2) : strlen(p2);
++	if (!NX2_EqualNoCase(p2, n2, "uzdoom-nx2"))
++		return NX2_PATH_OUTSIDE;
++	if (!s2)
++	{
++		// the sandbox directory itself: it may be created and entered, never
++		// written, removed or renamed
++		return (op == NX2_OP_MAKE_DIR || op == NX2_OP_CHDIR) ? NX2_PATH_OK : NX2_PATH_IS_ROOT;
++	}
++	return NX2_PATH_OK;
++}
++
++const char *NX2_PathVerdictName(NX2PathVerdict v)
++{
++	switch (v)
++	{
++	case NX2_PATH_OK: return "ok";
++	case NX2_PATH_OUTSIDE: return "outside the sandbox";
++	case NX2_PATH_IS_ROOT: return "the sandbox directory itself";
++	case NX2_PATH_BAD_DEVICE: return "device other than sdmc";
++	case NX2_PATH_BAD_CHAR: return "refused character";
++	case NX2_PATH_BAD_COMPONENT: return "refused name (dots/spaces)";
++	case NX2_PATH_ESCAPES_ROOT: return "'..' above the card root";
++	case NX2_PATH_TOO_LONG: return "path too long";
++	case NX2_PATH_EMPTY: return "empty path";
++	case NX2_PATH_BAD_CWD: return "unknown working directory";
++	}
++	return "?";
++}
+diff --git a/src/common/platform/posix/nx/nx2_pathpolicy.h b/src/common/platform/posix/nx/nx2_pathpolicy.h
+new file mode 100644
+index 0000000000..d078ab6ef4
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_pathpolicy.h
+@@ -0,0 +1,64 @@
++/*
++** nx2_pathpolicy.h
++** UZDoom NX2: the write policy of the SD card sandbox (pure C, no libnx).
++**
++** Every file system change the program makes (create, write, truncate,
++** delete, rename, mkdir, rmdir, chmod, utimes, link, symlink) must target a
++** path inside SANDBOX_ROOT on the SD card. This file decides that. It has no
++** dependency on libnx so that tests/pathpolicy_tests.c can run it on a PC.
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++#pragma once
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// The only directory the program may change, as seen by the sdmc device.
++#define NX2_SANDBOX_DIR   "/switch/uzdoom-nx2"
++#define NX2_SANDBOX_ROOT  "sdmc:" NX2_SANDBOX_DIR
++
++// Longest path the policy handles (Horizon's FS_MAX_PATH is 0x301).
++#define NX2_PATH_MAX 0x300
++
++typedef enum
++{
++	NX2_PATH_OK = 0,        // inside the sandbox, operation allowed
++	NX2_PATH_OUTSIDE,       // well formed, but outside the sandbox
++	NX2_PATH_IS_ROOT,       // the sandbox directory itself (only mkdir/chdir may use it)
++	NX2_PATH_BAD_DEVICE,    // a device prefix other than "sdmc:" or several ':'
++	NX2_PATH_BAD_CHAR,      // a character the policy refuses ('\\', control, wildcards...)
++	NX2_PATH_BAD_COMPONENT, // a component made of dots/spaces, or ending in '.' or ' '
++	NX2_PATH_ESCAPES_ROOT,  // ".." above the root of the card
++	NX2_PATH_TOO_LONG,
++	NX2_PATH_EMPTY,
++	NX2_PATH_BAD_CWD,       // the working directory is unknown or not absolute
++} NX2PathVerdict;
++
++typedef enum
++{
++	NX2_OP_WRITE_FILE,  // open for writing / create / truncate, unlink, chmod, utimes, link target
++	NX2_OP_REMOVE_DIR,  // rmdir, rename of a directory
++	NX2_OP_MAKE_DIR,    // mkdir (the sandbox directory itself is allowed)
++	NX2_OP_CHDIR,       // chdir (the sandbox directory itself is allowed)
++} NX2PathOp;
++
++// Resolves 'path' as the sdmc device would (optional "sdmc:" prefix, relative
++// to 'cwd' when it does not start with '/'), normalizes "." and "..", and
++// writes the canonical absolute path ("/a/b") to 'out'. Returns NX2_PATH_OK on
++// success, or why the path is refused. Nothing is decided about the sandbox.
++NX2PathVerdict NX2_PathCanonical(const char *cwd, const char *path, char *out, size_t outSize);
++
++// Full decision for one operation: NX2_PATH_OK only when the canonical path is
++// strictly inside NX2_SANDBOX_DIR (or is that directory, for mkdir/chdir).
++// 'canon' (optional, NX2_PATH_MAX+1 bytes) receives the canonical path.
++NX2PathVerdict NX2_PathCheck(const char *cwd, const char *path, NX2PathOp op, char *canon);
++
++const char *NX2_PathVerdictName(NX2PathVerdict v);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/common/platform/posix/nx/nx_glthread.cpp b/src/common/platform/posix/nx/nx_glthread.cpp
+index a3ba9b96ab..176be1f907 100644
+--- a/src/common/platform/posix/nx/nx_glthread.cpp
++++ b/src/common/platform/posix/nx/nx_glthread.cpp
+@@ -33,11 +33,7 @@ CVAR(Int, nx_glthread_core, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ 
+ extern "C"
+ {
+-	void __real__mesa_glthread_finish_before(void *ctx, const char *func);
+ 	int __real_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*fn)(void *), void *arg);
+-	Result __real_nwindowDequeueBuffer(NWindow *nw, s32 *out_slot, NvMultiFence *out_fence);
+-	Result __real_nwindowQueueBuffer(NWindow *nw, s32 slot, const NvMultiFence *fence);
+-	void __real__util_queue_fence_wait(void *fence);
+ }
+ 
+ // struct gl_context (Mesa 20.1, devkitPro switch build)
+@@ -173,13 +169,6 @@ static void CountSync(const char *name, double ms)
+ 	if (numSyncStats < 48) syncStats[numSyncStats++] = { name, 1, ms };
+ }
+ 
+-extern "C" void __wrap__mesa_glthread_finish_before(void *ctx, const char *func)
+-{
+-	double start = NXPerf_NowMS();
+-	NX_GLCrumb(func ? func : "sync");
+-	__real__mesa_glthread_finish_before(ctx, func);
+-	CountSync(func ? func : "?", NXPerf_NowMS() - start);
+-}
+ 
+ void NX_GLThreadWriteStats(FILE *f)
+ {
+@@ -257,28 +246,8 @@ void NX_Phase(const char *what)
+ 	fclose(f);
+ }
+ 
+-extern "C" Result __wrap_nwindowDequeueBuffer(NWindow *nw, s32 *out_slot, NvMultiFence *out_fence)
+-{
+-	NX_GLCrumb("nwindowDequeueBuffer (waiting for a free screen buffer)");
+-	Result r = __real_nwindowDequeueBuffer(nw, out_slot, out_fence);
+-	NX_GLCrumb("nwindowDequeueBuffer done");
+-	return r;
+-}
+ 
+-extern "C" Result __wrap_nwindowQueueBuffer(NWindow *nw, s32 slot, const NvMultiFence *fence)
+-{
+-	NX_GLCrumb("nwindowQueueBuffer");
+-	Result r = __real_nwindowQueueBuffer(nw, slot, fence);
+-	NX_GLCrumb("nwindowQueueBuffer done");
+-	return r;
+-}
+ 
+-extern "C" void __wrap__util_queue_fence_wait(void *fence)
+-{
+-	NX_GLCrumb("util_queue_fence_wait (waiting for the driver thread)");
+-	__real__util_queue_fence_wait(fence);
+-	NX_GLCrumb("util_queue_fence_wait done");
+-}
+ 
+ static char hangbuf[24576];
+ static size_t hanglen;
+diff --git a/src/common/platform/posix/nx/nx_loadscreen.cpp b/src/common/platform/posix/nx/nx_loadscreen.cpp
+index 8157e4cc14..88b119d51f 100644
+--- a/src/common/platform/posix/nx/nx_loadscreen.cpp
++++ b/src/common/platform/posix/nx/nx_loadscreen.cpp
+@@ -328,17 +328,17 @@ const float DefaultFrac[MS_COUNT] = { 0.f, 0.01f, 0.12f, 0.14f, 0.24f, 0.88f, 0.
+ 
+ const char *const StageText[MS_COUNT] =
+ {
+-	"Iniciando o RDoom (UZDoom 5.0.3)",
+-	"Abrindo arquivos do jogo e mods",
+-	"Iniciando áudio",
+-	"Carregando texturas e sprites",
+-	"Compilando scripts do mod (ZScript / DECORATE)",
+-	"Finalizando scripts",
+-	"Preparando gráficos",
+-	"Carregando menus",
+-	"Iniciando o jogo",
+-	"Quase pronto",
+-	"Iniciando vídeo",
++	"Démarrage d'UZDoom NX2 (UZDoom 5.0.3)",
++	"Ouverture des fichiers du jeu et des mods",
++	"Démarrage de l'audio",
++	"Chargement des textures et sprites",
++	"Compilation des scripts du mod (ZScript / DECORATE)",
++	"Finalisation des scripts",
++	"Préparation des graphismes",
++	"Chargement des menus",
++	"Démarrage du jeu",
++	"Presque prêt",
++	"Démarrage de la vidéo",
+ };
+ 
+ struct FileItem
+@@ -349,7 +349,7 @@ struct FileItem
+ };
+ 
+ std::mutex mtx;
+-std::string gTitle = "RDoom";
++std::string gTitle = "UZDoom NX2";
+ std::string gSubtitle;
+ std::string gDetail;
+ std::vector<FileItem> gFiles;
+@@ -377,12 +377,12 @@ float Rand01() { gRand = gRand * 1664525u + 1013904223u; return (gRand >> 8) * (
+ 
+ const char *const Tips[] =
+ {
+-	"Dica: na aba Mods do launcher, aperte A em um mod e use o direcional para mudar a ordem de carregamento.",
+-	"Dica: a primeira abertura de um conjunto de mods é a mais lenta. Nas próximas, o tempo restante aparece aqui.",
+-	"Dica: mods de mapas vão antes dos mods de gameplay na ordem de carregamento.",
+-	"Dica: o perfil \"Switch (leve)\" reduz luzes, partículas e efeitos distantes.",
+-	"Dica: abra o launcher segurando R em um jogo (modo aplicativo) para ter a RAM completa do console.",
+-	"Dica: cada perfil do launcher guarda seus próprios mods, ordem e opções.",
++	"Astuce : dans l'onglet Mods du launcher, appuyez sur A sur un mod puis utilisez la croix pour changer l'ordre de chargement.",
++	"Astuce : le premier lancement d'un ensemble de mods est le plus lent. Ensuite, le temps restant s'affiche ici.",
++	"Astuce : les mods de cartes se placent avant les mods de gameplay dans l'ordre de chargement.",
++	"Astuce : la qualité \"Basse\" réduit lumières, particules et effets lointains.",
++	"Astuce : lancez le homebrew en maintenant R sur un jeu (mode application) pour avoir toute la mémoire.",
++	"Astuce : chaque profil du launcher garde ses mods, son ordre et ses options.",
+ };
+ 
+ //==========================================================================
+@@ -604,14 +604,14 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 
+ 	// header
+ 	const uint32_t accent = 0xFF4A1C, accent2 = 0xFFB020;
+-	c.Text(fTitle, 76, 64, 44, "RDOOM", 0xFFFFFF);
+-	float tw = c.TextWidth(fTitle, 76, "RDOOM");
+-	c.Text(fTitle, 34, 64 + tw + 14, 78, "UZDOOM 5.0.3 \xE2\x80\xA2 NINTENDO SWITCH", accent);
++	c.Text(fTitle, 76, 64, 44, "UZDOOM NX2", 0xFFFFFF);
++	float tw = c.TextWidth(fTitle, 76, "UZDOOM NX2");
++	c.Text(fTitle, 34, 64 + tw + 14, 78, "UZDOOM 5.0.3 \xE2\x80\xA2 SWITCH 2", accent);
+ 	c.RoundRect(64, 128, 86, 5, 2.5f, accent, 255, accent2);
+ 	{
+ 		// port credit
+-		const char *by = "PORT POR RENAN (\xC3\x86ON)";
+-		const char *tg = "Telegram @aeon1911";
++		const char *by = "BASÉ SUR RDOOM NX (RENAN \xC3\x86ON)";
++		const char *tg = "kaiHEN \xE2\x80\xA2 OunceVK \xE2\x80\xA2 libounce";
+ 		float w1 = c.TextWidth(fTitle, 30, by);
+ 		float w2 = c.TextWidth(fBody, 18, tg);
+ 		c.Text(fTitle, 30, 1216 - w1, 62, by, 0xF2ECE8);
+@@ -665,7 +665,7 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 	if (first + shown < (int)files.size())
+ 	{
+ 		char buf[64];
+-		snprintf(buf, sizeof(buf), "+ %d arquivo(s)", int(files.size()) - first - shown);
++		snprintf(buf, sizeof(buf), "+ %d fichier(s)", int(files.size()) - first - shown);
+ 		c.Text(fBody, 18, 100, y, buf, 0x9A8F8A);
+ 	}
+ 
+@@ -691,9 +691,9 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 	float hx = bx + fillw * sweep;
+ 	c.Glow(hx, by + bh / 2, 22, 0xFFE0A0, 0.25f);
+ 
+-	std::string times = "Tempo: " + FormatTime(elapsed / 1000.f);
+-	if (remaining >= 0) times += "     Restante: ~" + FormatTime(remaining);
+-	else times += "     (primeira abertura com estes arquivos: medindo o tempo)";
++	std::string times = "Temps : " + FormatTime(elapsed / 1000.f);
++	if (remaining >= 0) times += "     Restant : ~" + FormatTime(remaining);
++	else times += "     (premier lancement avec ces fichiers : mesure du temps)";
+ 	c.Text(fBody, 19, bx, 634, times.c_str(), 0xB5A9A2);
+ 
+ 	// rotating tips
+@@ -749,7 +749,7 @@ void ReadLoadInfo()
+ 	if (fgets(line, sizeof(line), f))
+ 	{
+ 		line[strcspn(line, "\r\n")] = 0;
+-		if (line[0]) gSubtitle = std::string("Perfil: ") + line;
++		if (line[0]) gSubtitle = std::string("Profil : ") + line;
+ 	}
+ 	fclose(f);
+ }
+@@ -863,7 +863,7 @@ void NXLS_Start(int argc, char **argv)
+ 	gHistKey = hk;
+ 	LoadHistory();
+ 	ReadLoadInfo();
+-	if (gSubtitle.empty() && !gFiles.empty()) gSubtitle = "Jogo: " + gFiles[0].name;
++	if (gSubtitle.empty() && !gFiles.empty()) gSubtitle = "Jeu : " + gFiles[0].name;
+ 
+ 	fTitle.Init(nxls_font_bebas);
+ 	fBody.Init(nxls_font_poppins);
+@@ -952,7 +952,7 @@ void NXLS_ScriptProgress(int cur, int max)
+ 		// code generation is roughly the second half of the script stage
+ 		gSubFrac = std::max(gSubFrac, 0.5f + 0.5f * float(cur) / float(max));
+ 		char buf[96];
+-		snprintf(buf, sizeof(buf), "Gerando código: %d de %d funções", cur, max);
++		snprintf(buf, sizeof(buf), "Génération du code : %d sur %d fonctions", cur, max);
+ 		gDetail = buf;
+ 	}
+ }
+@@ -985,12 +985,12 @@ void NXLS_OnPrint(const char *text)
+ 				break;
+ 			}
+ 		}
+-		gDetail = "Lendo " + base;
++		gDetail = "Lecture de " + base;
+ 		(void)matched;
+ 	}
+ 	else if (!strncmp(text, "S_Init", 6)) { SetMilestone(MS_SOUND); gDetail.clear(); }
+ 	else if (!strncmp(text, "Texman.Init", 11)) { SetMilestone(MS_TEXTURES); gDetail.clear(); }
+-	else if (!strncmp(text, "LoadActors", 10)) { SetMilestone(MS_ACTORS); gDetail = "Isso é o que mais demora com mods grandes"; }
++	else if (!strncmp(text, "LoadActors", 10)) { SetMilestone(MS_ACTORS); gDetail = "C'est l'étape la plus longue avec les gros mods"; }
+ 	else if (!strncmp(text, "script parsing took", 19)) { SetMilestone(MS_SCRIPTSDONE); gDetail.clear(); }
+ 	else if (!strncmp(text, "R_Init", 6)) { SetMilestone(MS_RINIT); gDetail.clear(); }
+ 	else if (!strncmp(text, "M_Init", 6)) { SetMilestone(MS_MENUS); gDetail.clear(); }
+diff --git a/src/common/platform/posix/nx/nx_nvcompat.c b/src/common/platform/posix/nx/nx_nvcompat.c
+deleted file mode 100644
+index 291fc4b903..0000000000
+--- a/src/common/platform/posix/nx/nx_nvcompat.c
++++ /dev/null
+@@ -1,253 +0,0 @@
+-/*
+-** nx_nvcompat.c
+-** Emulator compatibility for fixed GPU virtual address reservations.
+-**
+-** Mesa's Horizon backend (NVK and Gallium) manages its own GPU VA heap and
+-** reserves each range with NVGPU_AS_IOCTL_ALLOC_SPACE + FIXED_OFFSET
+-** (libnx nvAddressSpaceAllocFixed), then maps buffers there with
+-** MAP_BUFFER_EX + FIXED_OFFSET.
+-**
+-** Ryujinx 1.3.x answers a fixed ALLOC_SPACE with the start of the free block
+-** that contains the requested range instead of the requested offset, and
+-** records its reservation at that wrong address. The range itself is marked
+-** used, so the following fixed MAP_BUFFER_EX finds no reservation and fails
+-** (NvInternalResult.InvalidInput, 0x195c), and vkCreateDevice returns
+-** VK_ERROR_OUT_OF_DEVICE_MEMORY. A second wrong reservation at an address
+-** that is already a key throws inside the emulator's nvdrv service.
+-**
+-** Real hardware returns the requested offset, so this file does nothing
+-** there. NX_NvCompatInit() checks the behaviour on a scratch address space
+-** before the graphics driver starts. Only if the answer is wrong:
+-**
+-**   for each address space, on its first fixed reservation:
+-**     1. reserve the last big page below the big-page region (the reply is
+-**        wrong, but afterwards the big-page region starts a free block);
+-**     2. reserve the whole big-page region at its real start (now correct);
+-**   then fixed reservations/frees inside that region are answered here
+-**   without an ioctl. Fixed MAP_BUFFER_EX calls still go to the emulator and
+-**   validate against the single region-wide reservation.
+-**
+-** Wrapped with -Wl,--wrap=nvioctlNvhostAsGpu_AllocSpace,
+-** --wrap=nvioctlNvhostAsGpu_FreeSpace, --wrap=nvioctlNvhostAsGpu_InitializeEx.
+-**
+-** Copyright 2026 RDoom contributors. GPLv3 (same as UZDoom).
+-*/
+-
+-#ifdef __SWITCH__
+-
+-#include <switch.h>
+-#include <string.h>
+-#include <stdio.h>
+-#include "nx_nvcompat.h"
+-
+-#define NVCOMPAT_MAX_AS 8
+-#define NVCOMPAT_BIG_PAGE 0x10000ULL
+-#define NVCOMPAT_FIXED 1u
+-
+-typedef struct
+-{
+-	u32 fd;
+-	bool used;
+-	bool tried;
+-	bool ok;
+-	u64 start, end;
+-} NvCompatAs;
+-
+-static bool s_active;
+-static bool s_checked;
+-static Mutex s_mutex;
+-static NvCompatAs s_as[NVCOMPAT_MAX_AS];
+-static char s_status[160] = "not checked";
+-static unsigned s_emulated;
+-
+-Result __real_nvioctlNvhostAsGpu_AllocSpace(u32 fd, u32 pages, u32 page_size, u32 flags, u64 align_or_offset, u64 *offset);
+-Result __real_nvioctlNvhostAsGpu_FreeSpace(u32 fd, u64 offset, u32 pages, u32 page_size);
+-Result __real_nvioctlNvhostAsGpu_InitializeEx(u32 fd, u32 flags, u32 big_page_size);
+-
+-static bool NvCompatBigRegion(u32 fd, u64 *start, u64 *end)
+-{
+-	nvioctl_va_region regions[2];
+-	memset(regions, 0, sizeof(regions));
+-	if (R_FAILED(nvioctlNvhostAsGpu_GetVARegions(fd, regions)))
+-		return false;
+-	for (int i = 0; i < 2; i++)
+-	{
+-		if (regions[i].page_size == NVCOMPAT_BIG_PAGE && regions[i].pages != 0)
+-		{
+-			*start = regions[i].offset;
+-			*end = regions[i].offset + regions[i].pages * regions[i].page_size;
+-			return true;
+-		}
+-	}
+-	return false;
+-}
+-
+-void NX_NvCompatInit(void)
+-{
+-	if (s_checked)
+-		return;
+-	s_checked = true;
+-	mutexInit(&s_mutex);
+-
+-	Result rc = nvInitialize();
+-	if (R_FAILED(rc))
+-	{
+-		snprintf(s_status, sizeof(s_status), "check skipped: nvInitialize 0x%x", rc);
+-		return;
+-	}
+-	NvAddressSpace as;
+-	rc = nvAddressSpaceCreate(&as, (u32)NVCOMPAT_BIG_PAGE);
+-	if (R_FAILED(rc))
+-	{
+-		snprintf(s_status, sizeof(s_status), "check skipped: nvAddressSpaceCreate 0x%x", rc);
+-		nvExit();
+-		return;
+-	}
+-	u64 start = 0, end = 0;
+-	if (!NvCompatBigRegion(as.fd, &start, &end) || end - start < 0x400000ULL)
+-	{
+-		snprintf(s_status, sizeof(s_status), "check skipped: no big-page VA region");
+-	}
+-	else
+-	{
+-		// one page well inside the region, so it is not the start of a free block
+-		const u64 want = start + 0x200000ULL;
+-		u64 got = 0;
+-		rc = __real_nvioctlNvhostAsGpu_AllocSpace(as.fd, 1, (u32)NVCOMPAT_BIG_PAGE, NVCOMPAT_FIXED, want, &got);
+-		if (R_SUCCEEDED(rc) && got != want)
+-		{
+-			s_active = true;
+-			snprintf(s_status, sizeof(s_status),
+-				"ACTIVE: fixed ALLOC_SPACE at 0x%llx answered 0x%llx (emulator quirk)",
+-				(unsigned long long)want, (unsigned long long)got);
+-		}
+-		else if (R_SUCCEEDED(rc))
+-		{
+-			snprintf(s_status, sizeof(s_status), "inactive: fixed ALLOC_SPACE behaves like hardware");
+-			__real_nvioctlNvhostAsGpu_FreeSpace(as.fd, want, 1, (u32)NVCOMPAT_BIG_PAGE);
+-		}
+-		else
+-		{
+-			snprintf(s_status, sizeof(s_status), "inactive: probe ALLOC_SPACE failed 0x%x", rc);
+-		}
+-	}
+-	// closing the scratch address space drops whatever the probe reserved
+-	nvAddressSpaceClose(&as);
+-	nvExit();
+-}
+-
+-bool NX_NvCompatActive(void)
+-{
+-	return s_active;
+-}
+-
+-const char *NX_NvCompatStatus(void)
+-{
+-	return s_status;
+-}
+-
+-unsigned NX_NvCompatEmulatedCalls(void)
+-{
+-	return s_emulated;
+-}
+-
+-static NvCompatAs *NvCompatFind(u32 fd, bool create)
+-{
+-	for (int i = 0; i < NVCOMPAT_MAX_AS; i++)
+-		if (s_as[i].used && s_as[i].fd == fd)
+-			return &s_as[i];
+-	if (!create)
+-		return NULL;
+-	for (int i = 0; i < NVCOMPAT_MAX_AS; i++)
+-	{
+-		if (!s_as[i].used)
+-		{
+-			memset(&s_as[i], 0, sizeof(s_as[i]));
+-			s_as[i].used = true;
+-			s_as[i].fd = fd;
+-			return &s_as[i];
+-		}
+-	}
+-	return NULL;
+-}
+-
+-static void NvCompatPrepare(NvCompatAs *st)
+-{
+-	st->tried = true;
+-	u64 start, end;
+-	if (!NvCompatBigRegion(st->fd, &start, &end) || start < 2 * NVCOMPAT_BIG_PAGE)
+-		return;
+-	u64 got = 0;
+-	Result rc = __real_nvioctlNvhostAsGpu_AllocSpace(st->fd, 1, (u32)NVCOMPAT_BIG_PAGE, NVCOMPAT_FIXED,
+-		start - NVCOMPAT_BIG_PAGE, &got);
+-	if (R_FAILED(rc))
+-		return;
+-	const u64 pages = (end - start) / NVCOMPAT_BIG_PAGE;
+-	rc = __real_nvioctlNvhostAsGpu_AllocSpace(st->fd, (u32)pages, (u32)NVCOMPAT_BIG_PAGE, NVCOMPAT_FIXED, start, &got);
+-	if (R_SUCCEEDED(rc) && got == start)
+-	{
+-		st->ok = true;
+-		st->start = start;
+-		st->end = end;
+-	}
+-}
+-
+-Result __wrap_nvioctlNvhostAsGpu_InitializeEx(u32 fd, u32 flags, u32 big_page_size)
+-{
+-	Result rc = __real_nvioctlNvhostAsGpu_InitializeEx(fd, flags, big_page_size);
+-	if (s_active)
+-	{
+-		// a new address space on this fd: forget any earlier state
+-		mutexLock(&s_mutex);
+-		NvCompatAs *st = NvCompatFind(fd, false);
+-		if (st)
+-			st->used = false;
+-		mutexUnlock(&s_mutex);
+-	}
+-	return rc;
+-}
+-
+-Result __wrap_nvioctlNvhostAsGpu_AllocSpace(u32 fd, u32 pages, u32 page_size, u32 flags, u64 align_or_offset, u64 *offset)
+-{
+-	if (!s_active || !(flags & NVCOMPAT_FIXED))
+-		return __real_nvioctlNvhostAsGpu_AllocSpace(fd, pages, page_size, flags, align_or_offset, offset);
+-
+-	mutexLock(&s_mutex);
+-	NvCompatAs *st = NvCompatFind(fd, true);
+-	if (st && !st->tried)
+-		NvCompatPrepare(st);
+-	const u64 size = (u64)pages * page_size;
+-	const bool inside = st && st->ok && align_or_offset >= st->start && size <= st->end - align_or_offset;
+-	if (inside)
+-		s_emulated++;
+-	mutexUnlock(&s_mutex);
+-
+-	if (inside)
+-	{
+-		if (offset)
+-			*offset = align_or_offset;
+-		return 0;
+-	}
+-	// A passthrough fixed reservation would hit the same emulator quirk and
+-	// may crash its nvdrv service; refuse it instead.
+-	return MAKERESULT(Module_LibnxNvidia, LibnxNvidiaError_BadParameter);
+-}
+-
+-Result __wrap_nvioctlNvhostAsGpu_FreeSpace(u32 fd, u64 offset, u32 pages, u32 page_size)
+-{
+-	if (s_active)
+-	{
+-		mutexLock(&s_mutex);
+-		NvCompatAs *st = NvCompatFind(fd, false);
+-		const u64 size = (u64)pages * page_size;
+-		const bool inside = st && st->ok && offset >= st->start && size <= st->end - offset;
+-		if (inside)
+-			s_emulated++;
+-		mutexUnlock(&s_mutex);
+-		if (inside)
+-			return 0;
+-	}
+-	return __real_nvioctlNvhostAsGpu_FreeSpace(fd, offset, pages, page_size);
+-}
+-
+-#endif
+diff --git a/src/common/platform/posix/nx/nx_nvcompat.h b/src/common/platform/posix/nx/nx_nvcompat.h
+deleted file mode 100644
+index 840d8a194f..0000000000
+--- a/src/common/platform/posix/nx/nx_nvcompat.h
++++ /dev/null
+@@ -1,23 +0,0 @@
+-#pragma once
+-// See nx_nvcompat.c. Link with
+-//   -Wl,--wrap=nvioctlNvhostAsGpu_AllocSpace -Wl,--wrap=nvioctlNvhostAsGpu_FreeSpace
+-//   -Wl,--wrap=nvioctlNvhostAsGpu_InitializeEx
+-
+-#include <stdbool.h>
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-// Detects the emulator's fixed ALLOC_SPACE behaviour. Call once, before the
+-// first Vulkan/EGL call.
+-void NX_NvCompatInit(void);
+-bool NX_NvCompatActive(void);
+-// Human-readable result of the check, for logs.
+-const char *NX_NvCompatStatus(void);
+-// Number of fixed reservations/frees answered locally so far.
+-unsigned NX_NvCompatEmulatedCalls(void);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+diff --git a/src/common/platform/posix/nx/nx_tls_bridge.c b/src/common/platform/posix/nx/nx_tls_bridge.c
+deleted file mode 100644
+index 4d58b996ea..0000000000
+--- a/src/common/platform/posix/nx/nx_tls_bridge.c
++++ /dev/null
+@@ -1,77 +0,0 @@
+-/*
+-** nx_tls_bridge.c
+-** Makes hardware-thread-pointer TLS work under libnx.
+-**
+-** libnx code is built with -mtp=soft: a thread-local access calls
+-** __aarch64_read_tp(), which returns ThreadVars->tls_tp (found through
+-** TPIDRRO_EL0). libnx never writes TPIDR_EL0, so it reads 0 on every thread.
+-**
+-** The Mesa 26.2.4 Horizon SDK links Rust code (NAK, the NVK shader compiler,
+-** and its std) that was built for aarch64-unknown-linux-gnu. Rust has no soft
+-** thread pointer, so that code reads TPIDR_EL0 directly. With TPIDR_EL0 = 0
+-** the first Rust thread-local access faults.
+-**
+-** Both kinds of code use the local-exec TLS model against the same static
+-** TLS block, so they agree on every offset once TPIDR_EL0 holds the value
+-** __aarch64_read_tp() returns. TPIDR_EL0 is part of the per-thread context
+-** the Horizon kernel saves (see libnx ThreadContext::tpidr), so setting it
+-** once at the start of each thread is enough:
+-**   - the main thread: NX_TlsBridgeInit(), called from userAppInit();
+-**   - every other thread: threadCreate() is wrapped (-Wl,--wrap=threadCreate)
+-**     so the new thread sets the register before running its entry point.
+-**     pthread_create() ends up in threadCreate() too.
+-**
+-** Copyright 2026 RDoom contributors. GPLv3 (same as UZDoom).
+-*/
+-
+-#ifdef __SWITCH__
+-
+-#include <stdlib.h>
+-#include <switch.h>
+-#include "nx_tls_bridge.h"
+-
+-extern void *__aarch64_read_tp(void);
+-
+-void NX_TlsBridgeInit(void)
+-{
+-	void *tp = __aarch64_read_tp();
+-	__asm__ volatile("msr tpidr_el0, %0" : : "r"(tp) : "memory");
+-}
+-
+-int NX_TlsBridgeCheck(void)
+-{
+-	void *hw;
+-	__asm__ volatile("mrs %0, tpidr_el0" : "=r"(hw));
+-	return hw == __aarch64_read_tp();
+-}
+-
+-typedef struct
+-{
+-	ThreadFunc entry;
+-	void *arg;
+-} NXTlsTrampoline;
+-
+-static void NXTlsThreadEntry(void *p)
+-{
+-	NXTlsTrampoline t = *(NXTlsTrampoline *)p;
+-	free(p);
+-	NX_TlsBridgeInit();
+-	t.entry(t.arg);
+-}
+-
+-Result __real_threadCreate(Thread *t, ThreadFunc entry, void *arg, void *stack_mem, size_t stack_sz, int prio, int cpuid);
+-
+-Result __wrap_threadCreate(Thread *t, ThreadFunc entry, void *arg, void *stack_mem, size_t stack_sz, int prio, int cpuid)
+-{
+-	NXTlsTrampoline *tr = (NXTlsTrampoline *)malloc(sizeof(*tr));
+-	if (tr == NULL)
+-		return MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
+-	tr->entry = entry;
+-	tr->arg = arg;
+-	Result rc = __real_threadCreate(t, NXTlsThreadEntry, tr, stack_mem, stack_sz, prio, cpuid);
+-	if (R_FAILED(rc))
+-		free(tr);
+-	return rc;
+-}
+-
+-#endif
+diff --git a/src/common/platform/posix/nx/nx_tls_bridge.h b/src/common/platform/posix/nx/nx_tls_bridge.h
+deleted file mode 100644
+index 891e59e970..0000000000
+--- a/src/common/platform/posix/nx/nx_tls_bridge.h
++++ /dev/null
+@@ -1,15 +0,0 @@
+-#pragma once
+-// See nx_tls_bridge.c. Link with -Wl,--wrap=threadCreate.
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-// Copies the libnx soft thread pointer into TPIDR_EL0 for the calling thread.
+-void NX_TlsBridgeInit(void);
+-// Returns 1 if TPIDR_EL0 matches the libnx thread pointer on this thread.
+-int NX_TlsBridgeCheck(void);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+diff --git a/src/common/platform/posix/nx/rdoom_nx.cpp b/src/common/platform/posix/nx/rdoom_nx.cpp
+index 83686128ac..8ae84c07b1 100644
+--- a/src/common/platform/posix/nx/rdoom_nx.cpp
++++ b/src/common/platform/posix/nx/rdoom_nx.cpp
+@@ -21,7 +21,7 @@
+ #include "paths.h"
+ #include "platform.h"
+ #include "rdoom_nx.h"
+-#include "nx_nvcompat.h"
++#include "nx2_fsguard.h"
+ #include "rdoom_version.h"
+ 
+ using namespace rdoom;
+@@ -124,8 +124,6 @@ public:
+ 				si.firmware = fw.display_version;
+ 			setsysExit();
+ 		}
+-		if (NX_NvCompatActive())
+-			si.emulator = "emulador detectado (compatibilidade nvhost-as ativa)";
+ 		return si;
+ 	}
+ 
+@@ -242,7 +240,8 @@ void RDoom_NXEarlyInit()
+ 	StartFlushThread();
+ 	unlink(RDOOM_SD_ROOT "/logs/engine-session.txt");
+ 	RLOG_I("boot", "%s (%s, %s), engine %s", RDOOM_VERSION_STRING, RDOOM_BUILD_DATE, RDOOM_GIT_DESCRIBE, RDOOM_ENGINE_VERSION);
+-	RLOG_I("boot", "clock policy: stock (RDoom never changes CPU/GPU/memory clocks)");
++	RLOG_I("boot", "clock policy: stock (UZDoom NX2 never changes CPU/GPU/memory clocks)");
++	RLOG_I("boot", "SD firewall: %s", NX2_FsGuardInstallReport());
+ 
+ 	// The previous session lost the GPU: start the shader caches from scratch,
+ 	// so a pipeline or shader binary written around the failure is never reused.
+@@ -284,10 +283,8 @@ int RDoom_ClearShaderCaches()
+ 	// UZDoom's Vulkan pipeline cache (written on exit)
+ 	if (RemoveFile(RDOOM_SD_ROOT "/cache/uzdoom/vulkanpipelinecache"))
+ 		n++;
+-	// Mesa's on-disk shader cache (NVK and the GL driver)
+-	const int m = RemoveTree("sdmc:/.mesa/mesa_shader_cache_sf");
+-	if (m > 0)
+-		n += m;
++	// (OunceVK keeps no shader cache on the SD card: Mesa's disk cache is off
++	// on Horizon, and nothing outside the sandbox is ever touched.)
+ 	return n;
+ }
+ 
+@@ -298,7 +295,7 @@ bool RDoom_NXLauncherUsedDisplay()
+ 
+ int RDoom_NXRunLauncher(int argc, char **argv, int &outArgc, char **&outArgv)
+ {
+-	g_nroPath = (argc > 0 && argv[0] && !strncmp(argv[0], "sdmc:", 5)) ? argv[0] : std::string(RDOOM_SD_ROOT "/RDoom.nro");
++	g_nroPath = (argc > 0 && argv[0] && !strncmp(argv[0], "sdmc:", 5)) ? argv[0] : std::string(RDOOM_SD_ROOT "/uzdoom-nx2.nro");
+ 	outArgc = argc;
+ 	outArgv = argv;
+ 	// engine arguments given directly (e.g. by a forwarder): skip the launcher
+@@ -307,7 +304,6 @@ int RDoom_NXRunLauncher(int argc, char **argv, int &outArgc, char **&outArgv)
+ 		RLOG_I("boot", "%d command-line arguments: launcher skipped", argc - 1);
+ 		return 1;
+ 	}
+-	RLOG_I("boot", "nv compat: %s", NX_NvCompatStatus());
+ 
+ 	Paths paths = RootPaths();
+ 	AppInfo info;
+@@ -523,6 +519,25 @@ static void FlushOnce()
+ 	}
+ 	for (auto &line : logLines)
+ 		RLOG_I("session", "%s", line.c_str());
++	// writes the SD card firewall refused since the last flush
++	{
++		static unsigned logged = 0;
++		const unsigned total = NX2_FsGuardDenials();
++		if (total != logged)
++		{
++			const unsigned kept = total < 16 ? total : 16;
++			const unsigned newOnes = total - logged < kept ? total - logged : kept;
++			char buf[200];
++			for (unsigned i = kept - newOnes; i < kept; i++)
++				if (NX2_FsGuardDenial(i, buf, sizeof(buf)))
++					RLOG_W("fsguard", "write refused (outside sdmc:/switch/uzdoom-nx2): %s", buf);
++			if (total - logged > newOnes)
++				RLOG_W("fsguard", "%u more refused writes not shown", total - logged - newOnes);
++			logged = total;
++		}
++		if (!NX2_FsGuardActive())
++			RLOG_E("fsguard", "SD card firewall no longer active");
++	}
+ 	if (writeSession)
+ 	{
+ 		FILE *f = fopen(RDOOM_SD_ROOT "/logs/engine-session.txt", "w");
+diff --git a/src/common/platform/posix/nx/rdoom_nx.h b/src/common/platform/posix/nx/rdoom_nx.h
+index 4fb870ee98..efb4ecc980 100644
+--- a/src/common/platform/posix/nx/rdoom_nx.h
++++ b/src/common/platform/posix/nx/rdoom_nx.h
+@@ -3,7 +3,13 @@
+ #include <stddef.h>
+ // RDoom start-up flow on Horizon (rdoom_nx.cpp).
+ 
+-#define RDOOM_SD_ROOT "sdmc:/switch/rdoom"
++#include "nx2_pathpolicy.h"
++// The program's home, and the only place it writes (nx2_fsguard.c).
++#define RDOOM_SD_ROOT NX2_SANDBOX_ROOT
++
++// Size of the game's swapchain (Switch 2 handheld screen; scaled up when docked).
++#define NX2_SCREEN_W 1920
++#define NX2_SCREEN_H 1080
+ 
+ // Fixes the working directory, creates the SD layout and opens the log.
+ void RDoom_NXEarlyInit();
+diff --git a/src/common/platform/posix/nx/rdoom_version.h.in b/src/common/platform/posix/nx/rdoom_version.h.in
+index 97f73d0605..795ad95c76 100644
+--- a/src/common/platform/posix/nx/rdoom_version.h.in
++++ b/src/common/platform/posix/nx/rdoom_version.h.in
+@@ -1,8 +1,8 @@
+ #pragma once
+ // Generated by CMake from rdoom_version.h.in.
+ #define RDOOM_VERSION "@RDOOM_VERSION@"
+-#define RDOOM_VERSION_STRING "RDoom @RDOOM_VERSION@"
++#define RDOOM_VERSION_STRING "UZDoom NX2 @RDOOM_VERSION@"
+ #define RDOOM_BUILD_DATE "@RDOOM_BUILD_DATE@"
+ #define RDOOM_GIT_DESCRIBE "@RDOOM_GIT_DESCRIBE@"
+ #define RDOOM_ENGINE_VERSION "UZDoom 5.0.3 (7910df71)"
+-#define RDOOM_GFX_VERSION "Mesa 26.2.4 Horizon SDK: NVK (Vulkan)"
++#define RDOOM_GFX_VERSION "OunceVK (Mesa NVK, Switch 2): Vulkan"
+diff --git a/src/common/platform/posix/sdl/sdlglvideo.cpp b/src/common/platform/posix/sdl/sdlglvideo.cpp
+index 5024605414..b533920479 100644
+--- a/src/common/platform/posix/sdl/sdlglvideo.cpp
++++ b/src/common/platform/posix/sdl/sdlglvideo.cpp
+@@ -30,7 +30,6 @@
+ #include "common/platform/posix/nx/nx_glthread.h"
+ #include "common/platform/posix/nx/nx_loadscreen.h"
+ #include "common/platform/posix/nx/rdoom_nx.h"
+-#include "common/platform/posix/nx/nx_nvcompat.h"
+ #include "gamestate.h"
+ #include <switch.h>
+ #endif
+@@ -173,9 +172,9 @@ namespace Priv
+ 		SDL_Rect* bounds = &displayBounds[vid_adapter % numberOfDisplays];
+ 
+ #ifdef __SWITCH__
+-		// the Switch reports the docked 1080p mode; the game renders at 720p
+-		win_w = 1280;
+-		win_h = 720;
++		// Switch 2: the game always renders 1920x1080 (the system scales it to 4K when docked)
++		win_w = NX2_SCREEN_W;
++		win_h = NX2_SCREEN_H;
+ #endif
+ 		if (win_w <= 0 || win_h <= 0)
+ 		{
+@@ -263,9 +262,9 @@ CUSTOM_CVAR(Int, vid_adapter, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITC
+ 		SDL_Rect* bounds = &Priv::displayBounds[vid_adapter % Priv::numberOfDisplays];
+ 
+ #ifdef __SWITCH__
+-		// the Switch reports the docked 1080p mode; the game renders at 720p
+-		win_w = 1280;
+-		win_h = 720;
++		// Switch 2: the game always renders 1920x1080 (the system scales it to 4K when docked)
++		win_w = NX2_SCREEN_W;
++		win_h = NX2_SCREEN_H;
+ #endif
+ 		if (win_w <= 0 || win_h <= 0)
+ 		{
+@@ -335,8 +334,8 @@ void I_GetVulkanDrawableSize(int *width, int *height)
+ {
+ 	assert(Priv::vulkanEnabled);
+ #if defined(__SWITCH__)
+-	if (width) *width = 1280;
+-	if (height) *height = 720;
++	if (width) *width = NX2_SCREEN_W;
++	if (height) *height = NX2_SCREEN_H;
+ #else
+ 	assert(Priv::window != nullptr);
+ 	SDL_Vulkan_GetDrawableSize(Priv::window, width, height);
+@@ -369,19 +368,20 @@ bool I_CreateVulkanSurface(VkInstance instance, VkSurfaceKHR *surface)
+ 	assert(Priv::vulkanEnabled);
+ #if defined(__SWITCH__)
+ 	NWindow *win = nwindowGetDefault();
+-	// The loading screen registered its own buffers, then framebufferClose
+-	// disconnects the window and stores format 0. nwindowConfigureBuffer
+-	// only copies the scanout format when this field is still the creation
+-	// sentinel. With format 0 the compositor never shows the Vulkan image.
+-	// Do this only when that screen owned the window. Releasing buffers on
+-	// a window we never claimed drops the layer and the present never shows.
+-	if (NXLS_ClaimedDisplay() || RDoom_NXLauncherUsedDisplay())
++	// Switch 2 (libounce): the default window presents through its VI2 layer;
++	// there is no binder queue to reset. One producer presents at a time: the
++	// launcher's and the loading screen's framebuffers are closed before this
++	// (framebufferClose retires their images), then the swapchain takes the
++	// layer. The window size sets the swapchain size.
++	Result dimRc = nwindowSetDimensions(win, NX2_SCREEN_W, NX2_SCREEN_H);
++	if (R_FAILED(dimRc))
+ 	{
+-		nwindowReleaseBuffers(win);
+-		win->format = ~0u;
+-		win->usage = 0;
+-		nwindowSetDimensions(win, 1280, 720);
++		char buf[96];
++		snprintf(buf, sizeof(buf), "nwindowSetDimensions(%d, %d) failed: 0x%x", NX2_SCREEN_W, NX2_SCREEN_H, (unsigned)dimRc);
++		RDoom_SessionSet("vulkan_window", buf);
+ 	}
++	// 60 fps at 60 Hz and at 120 Hz (handheld), VRR where the system allows it
++	nwindowSetFrameRates(win, 60, 60, true);
+ 	VkViSurfaceCreateInfoNN createInfo = {};
+ 	createInfo.sType = VK_STRUCTURE_TYPE_VI_SURFACE_CREATE_INFO_NN;
+ 	createInfo.window = (void*)win;
+@@ -468,7 +468,6 @@ DFrameBuffer *SDLVideo::CreateFrameBuffer ()
+ #ifdef HAVE_VULKAN
+ #ifdef __SWITCH__
+ 	RDoom_SessionSet("renderer_requested", vid_preferbackend == BACKEND_VULKAN ? "vulkan" : vid_preferbackend == BACKEND_OPENGL ? "opengl" : "gles");
+-	RDoom_SessionSet("nv_compat", NX_NvCompatStatus());
+ 	// Diagnostics without a new build: switch/rdoom/rdoom_debug.txt with one
+ 	// NAME=value per line. UPPER-CASE names are driver environment variables
+ 	// (NVK_DEBUG=push_sync, NVK_SWITCH_NO_UBO_CBUF=1, ...), applied before the
+@@ -573,8 +572,8 @@ DFrameBuffer *SDLVideo::CreateFrameBuffer ()
+ 			// RDoom renders with Vulkan only: no other renderer to fall back to.
+ 			RDoom_SessionSet("renderer_active", "none");
+ 			RDoom_SessionSet("vulkan_error", error.what());
+-			I_FatalError("O Vulkan n\xc3\xa3o p\xc3\xb4" "de ser iniciado / Vulkan could not be started:\n%s\n\n"
+-				"Detalhes em switch/rdoom/logs/engine-session.txt.", error.what());
++			I_FatalError("Vulkan n'a pas pu d\xc3\xa9marrer / Vulkan could not be started:\n%s\n\n"
++				"Details dans switch/uzdoom-nx2/logs/engine-session.txt.", error.what());
+ #else
+ 			if (Priv::window != nullptr)
+ 			{
+@@ -631,7 +630,7 @@ int SystemBaseFrameBuffer::GetClientWidth()
+ #ifdef HAVE_VULKAN
+ 	assert(Priv::vulkanEnabled);
+ #if defined(__SWITCH__)
+-	width = 1280;
++	width = NX2_SCREEN_W;
+ #else
+ 	SDL_Vulkan_GetDrawableSize(Priv::window, &width, nullptr);
+ #endif
+@@ -647,7 +646,7 @@ int SystemBaseFrameBuffer::GetClientHeight()
+ #ifdef HAVE_VULKAN
+ 	assert(Priv::vulkanEnabled);
+ #if defined(__SWITCH__)
+-	height = 720;
++	height = NX2_SCREEN_H;
+ #else
+ 	SDL_Vulkan_GetDrawableSize(Priv::window, nullptr, &height);
+ #endif
+@@ -755,9 +754,6 @@ SystemGLFrameBuffer::SystemGLFrameBuffer(void *hMonitor, bool fullscreen)
+ 	for ( ; glvers[glveridx][0] > 0; ++glveridx)
+ 	{
+ 		Priv::SetupPixelFormat(0, glvers[glveridx]);
+-#ifdef __SWITCH__
+-		nwindowReleaseBuffers(nwindowGetDefault());
+-#endif
+ 		Priv::CreateWindow(SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
+ 
+ 		if (Priv::window == nullptr)
+-- 
+2.47.3
+

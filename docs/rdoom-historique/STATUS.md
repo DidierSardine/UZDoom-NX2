@@ -1,0 +1,383 @@
+# RDoom NX — estado final em 2026-10-20 (1.1.4, projeto concluído)
+
+Pacote atual: `dist/RDoom.nro` sha256 `f8510adfc200f861f53de5a635e8df9b476395f900b8dfb7debd11db8c83235c`
+(motor `5.0.3-66-g1eb49010f`, release 1.1.4), zips e `SHA256SUMS.txt` em `dist/`.
+
+## Feito e verificado
+
+- Build reproduzível em Docker; série de patches em `engine/` (branch `rdoom-nx`) e em `patches/`.
+- **Vulkan (padrão) funcionando no Ryujinx**: instância, superfície VI, NVK GM20B, swapchain,
+  frames apresentados, mapas renderizados corretamente — Freedoom 2, Brutal Doom, Lexicon e
+  Compendium.
+- **Só Vulkan (1.0.0):** o backend OpenGL/GLES do UZDoom não é mais compilado (`HAVE_OPENGL=OFF`,
+  `HAVE_GLES2=OFF`); o motor força `vid_preferbackend 1`, o launcher não oferece outro renderizador e
+  perfis antigos com "opengl"/"gles" passam a usar Vulkan. Ryujinx: Freedoom MAP01 a 60 fps
+  (`evidence/ryujinx/90-vk-only-sanity`).
+- **Aviso de mods em conflito:** antes de iniciar, o launcher lê o `CVARINFO` de cada mod ativo e
+  avisa quando dois declaram as mesmas variáveis (o UZDoom pararia com erro); conferido com os pk3
+  do Ashes 2063 (todos repetem `hud_vertical`).
+- **Desempenho Vulkan** (Ryujinx, sem limite): 97 → 367,5 fps no Freedoom MAP01; Brutal Doom
+  291,6 fps. No padrão (vsync 60): 60,0 fps com desvio
+  < 1 ms. Ver `PERFORMANCE.md`.
+- Otimizações: limpeza de cache só em memória cacheada, sobreposição CPU/GPU entre frames, fim das
+  gravações de `phase.log` a cada frame (todas com medição antes/depois).
+- Launcher (perfis, bibliotecas, ordem de carga, editor, diagnóstico): 213 testes de host
+  (ASan/UBSan), smoke de UI, verificação de pacote e de ausência de overclock — `scripts/test.sh`.
+- "Contaminação de perfil" do teste antigo do Brutal Doom: era o roteiro de teste, corrigido
+  (`PROFILE=` no `ryujinx-test.sh`).
+- WadFusion: arquivo do usuário feito para UZDoom 4.14 (mesmos 108 erros no UZDoom 5.0.3 oficial
+  de PC); o launcher identifica e explica.
+- Documentação: README, PORTING_AUDIT, ARCHITECTURE, VULKAN, PROFILES, MOD_COMPATIBILITY,
+  RYUJINX_TEST_REPORT, PERFORMANCE.
+
+## Primeiro teste em Switch físico (2026-10-11, pelo autor)
+
+- Vulkan inicia no console (NVK GM20B, `nv_compat: inactive`, memória `0:LVCa 1:LVCo`) e o jogo
+  ficou **muito fluido** com DOOM2 + Trailblazer.
+- **Falha:** `Could not submit command buffer: device lost` (a GPU caiu) — primeiro ao atirar e,
+  nas sessões seguintes, já ao entrar no mapa (DOOM2 puro, Brutal, Legacy of Rust, Lexicon ao
+  escolher um mapa). No Ryujinx o mesmo cenário funciona (o emulador não reproduz falhas da GPU).
+- A piora entre sessões com o mesmo build aponta para caches gravados no SD (pipeline do UZDoom,
+  gravado ao sair inclusive após o erro, e cache de shaders do Mesa em `sdmc:/.mesa`). Mudanças:
+  o cache não é mais gravado depois de uma perda da GPU, a sessão seguinte apaga os caches
+  automaticamente (`logs/gpu-lost.txt` → `gpu-lost-previous.txt`), há a ação "Limpar caches de
+  shaders" (X) no Diagnóstico e o arquivo `rdoom_debug.txt` para testes sem novo build.
+- Segundo teste (build af152e499): com caches limpos e `rd_vk_frameoverlap=0` a GPU ainda cai no
+  1º frame 3D (menus 2D funcionam); com `NVK_DEBUG=push_sync` a GPU trava. Sobreposição e cache
+  descartados. Suspeitos: profundidade/Z (compressão, ZCULL) ou outro estado 3D só do hardware.
+  Build f7bb32d2d: mensagens do driver no log (`VK_EXT_debug_utils`), contornos automáticos em
+  passos após cada perda da GPU (`gpu_workaround` no relatório) e logs anteriores em `logs/anterior/`.
+- Terceiro teste (build f7bb32d2d): o driver registrou `channel 2 lost: fifo idle timeout` — a GPU
+  trava no 1º frame 3D (não é falha de MMU). Os contornos `no_compression`, `NVK_SWITCH_NO_UBO_CBUF`
+  e `NVK_SWITCH_MAPPED_COMPLETION=0` (um a um, cumulativos) não resolveram. Memória de comandos já é
+  sem cache por padrão no SDK. Build 3ee01de29: passo 1 = todos os contornos + profundidade D32S8;
+  passo 2 = rastreamento por desenho (`logs/boot.log`) para identificar o comando que trava.
+- **Causa encontrada (4º teste, dump do push buffer com `push_sync`):** o envio que trava a GPU é
+  um único desenho de 4 vértices entre `LOAD_ZCULL` e `STORE_ZCULL` — o primeiro desenho que usa o
+  buffer de profundidade da cena (frames só 2D nunca travaram). O NVK só liga ZCULL para imagens de
+  profundidade com uso dentro de {transfer, sampled, depth attachment, input attachment}; no build
+  790a58706 as profundidades no Switch são `TRANSIENT_ATTACHMENT` (só anexo), então o ZCULL fica
+  desligado (`vulkan_scene_depth: … ZCULL off`). SSAO fica bloqueado enquanto isso; `rd_vk_zcull=1`
+  volta ao comportamento antigo para teste. **Resultado no console: ainda trava** — o dump no
+  Ryujinx confirma que o ZCULL saiu (sem `LOAD/STORE_ZCULL`), então ele não era a causa.
+  Build 9eb182e9a: escada de experimentos — 1 = fans como triângulos, 2 = + sem escrita de profundidade/
+  stencil, 3 = + sem testes de profundidade/stencil, 4 = rastreamento (agora também no wipe).
+- **5º teste (escada de experimentos):** com "triangle fans" desenhados como triângulos indexados o
+  console **entra no mapa**; o travamento seguinte veio no primeiro tiro, nos primeiros pipelines com
+  *depth bias* (marcas de bala). Build 58637c0cf: fans → triângulos e depth bias emulado pelo viewport
+  ligados por padrão; a próxima perda da GPU vai direto ao modo rastreamento.
+- **6º teste:** no modo normal ainda trava ao entrar; no rastreamento um teste travou num desenho
+  comum (o 114º, depois de 113 iguais) e outro rodou sem travar → o travamento não depende de um
+  desenho específico. Hipótese atual: regressão no driver. O GZDoom-NX-Modern (funciona no console)
+  embute **Mesa 26.2.1 (git-fe913078f1, 11/09)** do mesmo autor (NaGa); o nosso SDK é 26.2.4 (06/10).
+  Kit `dist/RDoom-teste-driver.zip`: o mesmo build ligado a Mesa 26.2.2 (25/09, run 36188294344),
+  26.2.3 (28/09, run 36439383707) e 26.2.4, para localizar a versão que introduziu o problema.
+  Imagens Docker variantes: `third_party/mesa-sdk/dl/Dockerfile.sdk2622/.sdk2623` (hashes dos
+  arquivos em `dl/*.files.sha256`). Logs das últimas 5 sessões em `logs/anterior … anterior-5`.
+- **7º teste (kit de drivers, 2026-10-12):** Mesa 26.2.2, 26.2.3 e 26.2.4 travam do mesmo jeito ao
+  entrar no MAP01 (DOOM2 + Trailblazer, `channel 2 lost: fifo idle timeout`) → não é regressão do
+  driver depois de 25/09. O dump do 6º teste mostra a GPU presa num draw indexado comum (macro MME de
+  draw, 30 índices): típico de shader que não termina. Causa provável: o cabeçalho da lista de luzes
+  dinâmicas (`lights[uLightIndex]`) lido como lixo no hardware, transformando os laços de luz em
+  trabalho praticamente infinito (o tiro cria a luz do clarão; o Ryujinx zera a memória e não
+  reproduz). O mesmo travamento foi relatado no GZDoom 4.14 com esse driver.
+  Build beafab8d9: `getLightRange()` em `main.fp` valida o cabeçalho (0, fins em ordem, até 256 luzes;
+  NaN rejeitado) e, se for implausível, a superfície fica sem luz dinâmica naquele frame — os laços
+  ficam sempre limitados. Custo: uma comparação por superfície iluminada. Ryujinx: 60 fps, clarão do
+  tiro visível no Brutal Doom (`evidence/ryujinx/69-lightguard-brutal`). Build 8e8749d55: uma perda
+  de GPU deixada por build antigo limpa os caches mas não avança a escada (`gpu-lost.txt` tem `build:`).
+  Kit de drivers arquivado em `build/kits/`.
+- **8º teste (build 8e8749d55, 2026-10-12): sem travamentos** com Trailblazer e Brutal Doom 21 —
+  a validação do cabeçalho de luzes resolveu o `device lost`. Logs em `evidence/hw/2026-10-12-lightguard`.
+  O `perf.log` real mostra o jogo **limitado pela GPU**: 32–41 fps no MAP01 com Trailblazer, CPU com
+  1,5–3 ms de cena e 1,3 ms de tic, e ~18–23 ms por frame esperando a GPU. Build 3433686d6: tempos de
+  GPU por frame no `perf.log` (cena 3D / pós-processamento / 2D+apresentação, modo portátil/dock),
+  benchmark no console (`rd_gpubench=1`, resultado em `logs/gpu-bench.txt`), formato da cena
+  configurável (`rd_vk_scenefmt`) e fim da cópia da cena para o pós-processamento (`rd_vk_sceneswap`).
+- **Benchmark no console (Lite, portátil, Brutal Doom 21 MAP01):** GPU 6,75 ms/frame no ponto
+  congelado; luzes dinâmicas ~0%, escala 0,75 −36%, escala 0,5 −62%, RGBA8 −4%, RGB10A2 −2%, ZCULL 0%,
+  a cópia antiga da cena +8% (removida). Durante o jogo a GPU leva 8–13 ms, mas os frames levavam
+  24–31 ms: a GPU não é o gargalo, CPU e GPU trabalhavam em série (um envio por frame, preso ao
+  semáforo da imagem da tela). Build 6b42e83a0: a cena vai para a GPU ao terminar e em blocos de
+  300 desenhos (`rd_vk_earlysubmit`, `vk_submit_size 300`); só pós-processamento/2D esperam o vsync.
+  Logs em `evidence/hw/2026-10-12-gpubench`.
+- **Teste do 6b42e83a0 (Brutal Doom 21):** GPU 10–14 ms, frames ainda 20–31 ms (CPU esperava o frame
+  anterior antes de montar o próximo) e picos de 100–350 ms na primeira porta/tiro/explosão. Causas:
+  pipelines compilados de novo a cada sessão (cache só era salvo saindo pelo menu) e escritas síncronas
+  no SD dentro dos frames (logs, `engine-session.txt`, `boot.log` por pipeline, stderr do mpg123).
+  Build 273d38b21: dois frames em voo (buffers por frame em duas regiões), escrita dos logs por uma
+  thread em segundo plano, cache de pipelines salvo 3 s após o último pipeline novo, `perf.log` em
+  `logs/` com contagem de pipelines e texturas por frame lento. Logs em `evidence/hw/2026-10-12-earlysubmit`.
+- **Teste do 273d38b21 (duas sessões curtas, Brutal Doom 21):** espera pelo frame anterior caiu de
+  11–15 ms para 6,6–7,8 ms; cache de pipelines carregado (297 KB), mas cada pipeline ainda custa ~20 ms
+  no console (1,6 ms no Ryujinx): o driver envia o shader à memória da GPU e espera. Build c391ba597:
+  lista de pipelines por jogo (`cache/uzdoom/rdoom-pipelines-<hash>.bin`) recriada no carregamento do
+  mapa. Logs em `evidence/hw/2026-10-12-pipelined`.
+- **Teste do c391ba597 (Brutal Doom 21):** pré-criação funcionou (`40 of 42 pipelines in 1099 ms`, nenhum
+  pipeline novo no jogo). Restam picos de GPU nas explosões (dezenas de sprites translúcidos grandes de
+  fumaça: cena 3D > 16 ms, frames de até ~90 ms) e cenas pesadas a 44 fps (GPU 14 ms). Build 4cd05c98b:
+  resolução dinâmica da cena 3D (`rd_dynres`, meta 12 ms de GPU, mínimo 60%, ampliação linear antes da
+  arma/HUD, que ficam em resolução cheia). Logs em `evidence/hw/2026-10-12-warmup`.
+- **Teste do 4cd05c98b:** "muito mais fluido"; 60 fps cravados fora das explosões. A resolução dinâmica
+  ficou presa em 60% (o blit de ampliação custava 2–4 ms no NVK e impedia a volta) e as explosões ainda
+  davam frames de 100–200 ms de GPU (400–650 sprites, até 430 translúcidos; sprites são iluminados na
+  CPU, então o custo é mistura). Build 87e335d13: cena RGBA8 por padrão (`rd_vk_scenefmt 2`), descarte de
+  fragmentos de sprites translúcidos abaixo de 2% de alfa (`rd_sprite_alphacut`), ampliação por desenho
+  (`shaders/pp/upscale.fp`) e controle que volta a 100% quando cabe. Resumo em `evidence/hw/2026-10-12-dynres/RESUMO.txt`.
+- **Teste do 87e335d13:** "100% fluido em grande parte"; a primeira explosão ainda cai mesmo reabrindo o
+  jogo (texturas de fogo/fumaça enviadas na primeira aparição, 9–23 por frame; listas de desenho de
+  30–70 ms na CPU) e a segunda é fluida; resolução dinâmica presa em 60% porque os timestamps incluem as
+  pausas entre envios. Build seguinte: lista de texturas de efeito por jogo
+  (`cache/uzdoom/rdoom-textures-<hash>.txt`) carregada no fim do pré-carregamento do mapa; resolução
+  dinâmica guiada por frame atrasado + espera pela GPU.
+- **Teste do 35cd95841 (2026-10-13):** "um pouco mais fluido", mas com quedas. Sessões de ~15 s: a lista
+  de texturas só ia para o SD 3–5 s depois da explosão e se perdia ao sair (a 2ª sessão não pré-carregou
+  nada). O frame da explosão gastou ~150 ms em "bsp/lists" lendo 3,5 MB do SD e decodificando PNG: cada
+  sprite novo era decodificado duas vezes na thread do jogo/renderização (recorte de bordas em
+  `TrimBorders` e depois o envio). Build ec326349f: decodificação e recorte no worker do núcleo 2
+  (`vk_asynctex.cpp`, `rd_vk_async_textures`; `rd_async_sprites`), sprite fica de fora 1–2 frames até a
+  imagem estar pronta, classes pré-carregadas aos poucos (0,75 ms/frame), sons com prioridade URGENT,
+  lista gravada 1 s após cada entrada e escritor em 0,25 s. perf.log ganhou jogador/spawn/StartSound e
+  notas de ações de script ≥ 5 ms (arquivo:linha). Logs em `evidence/hw/2026-10-13-texwarm`.
+- **Teste do ec326349f (2026-10-13):** a lista funcionou (1ª sessão gravou 429, 2ª pré-carregou 429 em
+  0,8 s). Problemas: ao abrir uma porta os sprites piscaram e levaram ~1 s para aparecer (um worker,
+  duas decodificações por imagem); 2ª sessão com frame de 132 ms (21 texturas de parede/piso: `gl_precache`
+  estava desligado) e vários de 90–155 ms sem custo de cena — a thread de fundo segurava o lock do log
+  (`LogFlush`/`fflush` de stdout e perf.log) durante a escrita no SD e qualquer linha de log do jogo
+  esperava (ex.: `vulkan_frames_presented` a cada 600 frames); resolução dinâmica presa em 60%.
+  Build 8cba57262: logs do jogo só vão para a memória (gravação sem lock compartilhado), uma
+  decodificação por sprite (recorte calculado no mesmo buffer), ator mantém o quadro anterior até o novo
+  ficar pronto, 2 workers, `gl_precache` ligado sem os sprites de todas as classes (migração única de
+  padrões salvos via `rd_defaults_rev`), resolução dinâmica sobe sem quadro perdido. Logs em
+  `evidence/hw/2026-10-13-asynctex`.
+- **Teste do 8cba57262 (2026-10-13):** portas melhores segundo o autor; nenhum frame > 90 ms na 1ª sessão
+  de jogo, dois na 2ª (95–115 ms dentro de `BeginFrame`, com 4 envios de textura e só 5–37 ms de espera
+  pela GPU). Fumaça do Brutal apontada como o peso restante (resolução dinâmica caiu a 60%). Build
+  5625345a5: perf.log detalha o `BeginFrame` e o envio mais lento (nota para > 10 ms), resumo conta frames
+  > 18 ms e > 35 ms, pré-cargas só sobem após frame em dia, `nx_effect_minalpha 0.04` (fumaça quase
+  invisível não é desenhada). Logs em `evidence/hw/2026-10-13-hold`.
+- **Teste do 5625345a5 (2026-10-13):** explosões e portas sem travar segundo o autor; a fumaça ainda pesa.
+  Log: `BeginFrame` de 57 ms era a gravação da lista de texturas (FString montada linha a linha); um frame
+  de 2,4 s na montagem de listas enquanto o SD gravava (o mutex de entradas do ZIP era mantido durante a
+  leitura do SD); em lutas com fumaça metade dos frames atrasados com a GPU limitada por preenchimento
+  mesmo a 60%. Build 8cf03687d: cabeçalho do ZIP lido fora do mutex, lista gravada 1 s após a primeira
+  textura nova e depois no máximo a cada 20 s, estabilizador ligado (`nx_stabilizer 60`), menu/pausa não
+  contam como atraso. Logs em `evidence/hw/2026-10-13-smoke`.
+- **Teste do 8cf03687d (2026-10-13):** "fumaça continua igual". Em luta o estabilizador ficou no nível
+  máximo e ainda havia 188 sprites translúcidos por frame, 58% dos frames atrasados, 9,6 ms de cena 3D na
+  GPU a 60% (fumaça próxima e densa; cortes por distância/opacidade não alcançam). "save" no `BeginFrame`
+  de 67–83 ms: `M_GetCachePath(true)` (mkdir no SD) a cada gravação e leitura do cache de pipelines.
+  Build a7f213106: orçamento de área de tela para efeitos translúcidos sob o estabilizador (20 telas no
+  nível 1 a 3 no nível 6; perto→longe, some a fumaça atrás de fumaça), caminhos das listas calculados uma
+  vez, cache de pipelines lido num worker com mutex. Logs em `evidence/hw/2026-10-13-stab`.
+- **Teste do a7f213106 (2026-10-13, sessão de ~50 s):** em luta, frames acima de 18 ms caíram de 58% para
+  ~25% e os acima de 35 ms de 42–60 para 1–21 por janela de 10 s; translúcidos por frame de 188 para 62–122;
+  nenhum frame ≥ 90 ms fora o carregamento. O estabilizador fica nos níveis 5–6 quase o tempo todo
+  (luzes dinâmicas reduzidas a 2–3) e a resolução dinâmica em 60%. Logs em `evidence/hw/2026-10-13-area2`.
+  Build fb774e06a: o estabilizador corta a fumaça primeiro (orçamento de área desde o nível 1) e as luzes só
+  a partir do nível 3, devolve detalhes após 60 frames bons; perf.log com resumo a cada 5 s, efeitos
+  cortados por frame e frames acima de 40 ms.
+- **Teste do fb774e06a (2026-10-13, 80 s, MAP01–MAP02):** quase sempre 60 fps, 0–3 frames > 35 ms a cada 5 s;
+  uma explosão deu ~25 frames de 41–69 ms (até 55 ms de espera pela GPU, ~300 translúcidos, só 17 cortados:
+  faíscas/chamas/destroços do Brutal são projéteis); cada gravação da lista (a cada 20 s) ainda custava
+  95–165 ms. Build 5.0.3-44-ge01b911d4: projéteis sem dano contam como efeito, lista formatada/gravada por um worker.
+  Logs em `evidence/hw/2026-10-13-stab2`.
+- **Teste do e01b911d4 (2026-10-13, 2,5 min):** travão da lista resolvido; nas explosões o orçamento corta
+  até 84 efeitos/frame, 0–3 frames > 35 ms a cada 5 s. Os frames de 41–56 ms restantes vinham a cada 10 s:
+  a linha de log do relatório de sessão (a cada 600 frames) custava 37–39 ms no present. O estabilizador nunca
+  saía do nível 6 (CPU do Brutal acima de 2/3 do frame). Build 5.0.3-45-g4020ab81e: linhas do relatório escritas pela thread
+  de fundo; detalhes voltam com trabalho < 80% do frame. Logs em `evidence/hw/2026-10-13-effects`.
+  Atenção: rodar o Ryujinx com o cartão do Switch montado por MTP (DBI) travou o PC do autor.
+- **Teste do 4020ab81e (2026-10-13):** estabilizador devolve detalhes (níveis 0–1 com 20–26 luzes nas partes
+  calmas), explosões com 0–5 frames > 35 ms a cada 5 s. Restavam um frame de 40–65 ms a cada 10 s e "save"
+  de 100–150 ms: a thread do jogo esperava um lock da thread de gravação, que rodava com prioridade mínima no
+  núcleo do jogo e ficava atrás das outras threads quando interrompida segurando o lock. Build 5.0.3-46-gbda37a838 (b173c0a27 antes da troca do e-mail dos commits): thread de
+  gravação no núcleo 2 com a prioridade do jogo; uma lista de pipelines para todos os jogos
+  (`rdoom-pipelines-all.bin`). Logs em `evidence/hw/2026-10-13-sesslog`.
+- **Teste do bda37a838 (2026-10-13):** Freedoom 2 + Brutal (60 s): um único frame > 40 ms (logo após entrar no
+  mapa), janelas de 5 s com 0–1 frame > 35 ms, estabilizador no nível 0–1 com 25–26 luzes; o travão a cada 10 s
+  e os "save" sumiram. DOOM2 + Brutal (2 min, com troca de mapa): pipelines prontos em 3 ms no carregamento,
+  nenhum shader criado em jogo, poucos frames de 40–68 ms; numa luta pesada até 17 frames > 35 ms em 5 s.
+  Logs em `evidence/hw/2026-10-13-writer`.
+- **Fumaça e fogo em meia resolução (5.0.3-47-gced311a28, 2026-10-13):** efeitos translúcidos grandes
+  (alfa ou aditivos, só efeitos puros, ≥ 0,4% da tela cada) vão para uma camada RGBA8 de meia resolução,
+  misturada sobre a cena antes da arma e do HUD, quando somam ≥ 0,6 tela (`rd_halfeffects_minscreen`;
+  abaixo disso a camada custaria mais do que economiza). A profundidade da camada vem da cena (cópia R32F
+  em meia resolução + passada que grava `gl_FragDepth`). Nos primeiros quadros a cópia é lida de volta:
+  se vier só zero a camada desliga na sessão (`vulkan_half_effects` no engine-session.txt) e os efeitos
+  voltam a ser desenhados como antes. No Ryujinx é o que acontece: o emulador não amostra a visão de
+  profundidade do NVK (`Invalid texture format 0x2512B`); camada, composição e mapeamento foram
+  conferidos lá com os modos `rd_halfeffects_debug` 2–5 e 10 (`evidence/ryujinx/119`–`135`). perf.log
+  mostra efeitos na camada e a área deles por quadro. **Teste no console pendente.**
+- **Teste do ced311a28 (2026-10-13):** nenhum jogo entrava no mapa — erro fatal "Unable to load
+  'shaders/pp/nxdepth.fp'": só o `RDoom.nro` novo foi copiado, o `uzdoom.pk3` do SD era o antigo. 30e33a509:
+  a camada confere os próprios shaders e se desliga (linha `vulkan_half_effects` pede o pacote inteiro)
+  em vez de parar o jogo; conferido no Ryujinx com um `uzdoom.pk3` sem o shader
+  (`evidence/ryujinx/136-oldpk3`). Logs em `evidence/hw/2026-10-13-halffx`.
+- **Teste do 30e33a509 (2026-10-13, Lexicon + Brutal e Freedoom 2 + Lexicon + Brutal):** a camada de meia
+  resolução funciona no console (`vulkan_half_effects_depth: ok`); nas lutas ela recebe 4–13 efeitos por quadro
+  (1,2–1,9 tela de fumaça) e os mapas ficam em 55–60 fps, poucos frames > 35 ms. Mas a vista ficou em 60% e o
+  estabilizador no nível 6 o mapa inteiro, com a GPU em ~10 de 16,7 ms: com vsync o quadro oscila entre 16 e
+  18 ms e as regras de volta (45/60–300 quadros seguidos abaixo de 17,2–17,3 ms) nunca se cumpriam. 5.0.3-49-g453febfd0:
+  resolução dinâmica decide pelo tempo da GPU (sobe enquanto a próxima escala cabe em 85%, cai só com a GPU
+  acima de 90%); estabilizador ignora quadros até 20% acima do alvo. O hub do Lexicon roda a ~33 fps (GPU
+  presa, 3D 12,7 ms a 60%) — o autor pediu para deixar como está. Logs em `evidence/hw/2026-10-13-halffx2`.
+- **Teste do 453febfd0 (2026-10-13, mapa de slaughter do Lexicon + Brutal):** 1000–1265 monstros, tic 6–9 ms,
+  48–57 fps limitados pela CPU (GPU 8,5 ms); camada de meia resolução com 18–25 efeitos por quadro. A vista
+  continuou em 60%: depois de cada mudança a média da GPU recomeça por 20 quadros e nesse intervalo a regra
+  antiga (tempo do quadro) derrubava cada subida nos quadros de 20 ms da CPU. 5.0.3-50-g74c08b37a: com carimbos de tempo
+  vistos a regra antiga nunca mais roda (a escala espera a média), a média recomeça a cada mapa; perf.log
+  mostra também a escala máxima da janela. A primeira sessão começou sem cache de pipelines (pacote
+  reinstalado): pipelines criados em jogo só nessa vez. Logs em `evidence/hw/2026-10-13-dyngpu`.
+- **Teste do 74c08b37a (2026-10-13, slaughter do Lexicon + Brutal):** a vista agora sobe a 100% (GPU 9–15 ms).
+  As quedas que restam são da CPU: 1700–2100 atores, tic de 16–25 ms; os imps do Brutal custam 5–11 ms por tic
+  (cada um cria dois atores de hitbox a cada 6 tics) e cada tiro de espingarda 7–15 ms (A_Refire refaz a
+  cadeia de 26 projéteis decorativos + 14 hitscans). O hub ficou lento nos primeiros segundos (escala descendo
+  de 100% em passos de 20 quadros). E de novo ~30 pipelines criados no meio do jogo: a cada atualização a
+  pasta `cache/` some do SD (sessões "anterior" sem cache algum). 5.0.3-51-gec2a43adb: decisões da resolução com 8
+  amostras e descida dimensionada; o pacote traz `rdoom-pipelines-seed.bin` (81 pipelines das sessões de
+  teste, `scripts/merge-pipelines.py`), juntado à lista do cartão — instalação nova no Ryujinx: 80 criados no
+  carregamento, nenhum em jogo (`evidence/ryujinx/142-seed-fresh`). Logs em `evidence/hw/2026-10-13-dynhold`.
+- **Hordas na CPU (5.0.3-52-g6bba77e33, 2026-10-13):** horda repetível no Ryujinx (`test-env/content/rdtest-horde.pk3`:
+  150 imps do Brutal v21 em volta do jogador, invulnerável): colisão 0,8 ms e visão 0,05 ms por tic, mas criar
+  os ~50 atores de hitbox por tic custava 2,5 ms, quase tudo no `malloc` da newlib (~47 µs por objeto de ~1,6 KB).
+  Objetos de script agora vêm de um alocador próprio (listas livres por classe de 16 bytes em blocos de 128 KB,
+  `common/objects/nx_objpool.cpp`): tic da horda 7,2 → 4,5 ms, criação 2,5 → 0,34 ms. perf.log ganhou por tic:
+  colisão, visão, criação de atores por fase, partes da criação de objetos e malloc/free da thread do jogo
+  por quadro (~650 mallocs, ~1 ms no Ryujinx; trocar o alocador global fica para depois de medir no console).
+- **Teste do 6bba77e33 (2026-10-14, CSH101 do Lexicon slaughter + Brutal v21):** com o alocador de objetos o tic
+  da horda caiu de 16–25 ms para 11–12,6 ms (37–55 fps, ~1800–2000 atores); criar ~75 atores por tic custa
+  1,0–1,1 ms (0,2 de alocação); colisão 1,7–2,3 ms; imps 3,8 ms. A lista do pacote preparou 79 pipelines no
+  carregamento (instalação do zero: até os perfis foram recriados); ainda 13 no hub e 6 no mapa. A thread do
+  jogo gastava ~2,8 ms por quadro em ~1500 malloc/free da newlib. 5.0.3-53-gc5638cdba: malloc/free/realloc/calloc/
+  malloc_usable_size de até 1 KB saem do mesmo pool (Ryujinx: 1,1 → 0,22 ms por quadro; 4 min de horda sem
+  erro); lista do pacote com 95 pipelines (hub VR incluído). Logs em `evidence/hw/2026-10-14-objpool`.
+- **Teste do c5638cdba (2026-10-14, seis sessões):** heap da thread do jogo 2,8 → 0,4–0,6 ms por quadro.
+  Lexicon slaughter CSH201 (1500–1780 atores): 45–55 fps, tic 6,6–9,4 ms, quase nenhum frame > 35 ms
+  (antes 23–36 fps). Aliens Eradication TC: 52–60 fps. Compendium e Ashes 2063: 43–53 fps em trechos, com a
+  CPU esperando 13–15 ms por quadro pela GPU e os carimbos de tempo marcando 12–13 ms — a resolução não
+  baixava. Ashes com os três episódios juntos: erro fatal de CVARINFO duplicado (os episódios são para
+  carregar separados; mesmo erro no UZDoom de PC). 5.0.3-54-ga50efb888: médias de ~20 quadros também baixam a escala
+  (quadros > 18,7 ms com espera pela GPU > 6 ms) e ela só sobe com 60 fps na média.
+  Logs em `evidence/hw/2026-10-14-pool`.
+- **Teste do a50efb888 (2026-10-14):** Ashes 2063 55–60 fps (resolução ~65% nos trechos pesados, volta a
+  100%), Compendium NJZ01 54–60 fps (antes 43–53). No slaughter, 3–4 ms de cada quadro fora de tudo que o
+  perf.log mede: `r_ticstability` gira, em cada quadro sem tic (25 de 60 por segundo), pelo tempo do último
+  tic (~8 ms ali). 5.0.3-55-g23e731af9: desligado por padrão no Switch (revisão 3 das configurações desliga uma vez);
+  horda no Ryujinx: tempo não medido 2,7 → 0,7 ms por quadro. Logs em `evidence/hw/2026-10-14-dynavg`.
+- **Teste do 23e731af9 (2026-10-14, Trailblazer + Lexicon slaughter, ~1300 atores):** 55–60 fps, quase sempre
+  60, resolução 80–100%, tempo não medido 0,8–1,0 ms por quadro (antes 3–4 ms). Um quadro de 220 ms em jogo:
+  pipeline novo de um shader do Trailblazer (efeito 14), agora salvo na lista do cartão. Lista do pacote com
+  96 pipelines. Logs em `evidence/hw/2026-10-14-trailblazer`.
+- **Publicado em 2026-10-13:** https://github.com/aeon1911/RDoom-NX (público) com o motor em
+  https://github.com/aeon1911/RDoom-NX-engine (fork do UZDoom, branch `rdoom-nx`, submódulo `engine/`).
+  Autor dos commits trocado para o e-mail privado do GitHub (os hashes do motor mudaram). Não publicados:
+  IWADs/mods, `test-env/`, `evidence/`, builds e SDKs baixados.
+- Ryujinx: o escurecimento de paredes/HUD acontece também sem workers (`evidence/ryujinx/105-biglist-noworkers`),
+  só depende do número de texturas criadas — limitação do emulador. Para validar visual no Ryujinx usar
+  `rd_sprite_prefetch 0` e lista vazia (`evidence/ryujinx/106-hold-nopf`).
+- Ryujinx: depois de algumas centenas de texturas enviadas (com ou sem a lista pré-carregada) paredes,
+  pisos e partes do HUD ficam pretos — reproduzido sem a lista (`evidence/ryujinx/95-brutal-nolist`).
+  Não aparece no console em sessões longas; atribuído ao cache de texturas do emulador (endereços de GPU
+  reutilizados). O primeiro tiro no Ryujinx custa 40–60 ms em ações nativas variadas (tradução JIT do
+  emulador; no console o tic da explosão foi 1,3 ms).
+- Arte: ícone do NRO e fundo do launcher refeitos a partir de gráficos do Freedoom 2 (TITLEPIC,
+  BOSSBACK, HEADA1, PLAYF1; licença BSD em `licenses/freedoom-art/`), gerados por
+  `assets/src/generate_art.py` direto do `freedoom2.wad`; logotipo RDoom mantido.
+- Ryujinx: Brutal Doom pelo caminho do título fica com tela preta no Vulkan (com ou sem ZCULL;
+  pelo `warp` funciona) — problema separado, a investigar.
+- Descartado pela desmontagem do driver: a remoção das limpezas de cache da CPU (memória coerente
+  do NVK é mapeada sem cache no console).
+
+## Teste do 1.0.0 no console (2026-10-14)
+
+- Freedoom 2 MAP01: 54,6–60 fps. CPU quase parada (tic 0,3 ms), esperando 13–14 ms por frame pela GPU;
+  timestamps da GPU 11 ms, resolução 65–95%. A média de frame (17,4–18,3 ms) ficava entre a regra de
+  descida (18,7 ms) e a de subida (17,5 ms): nada mexia na resolução. Motor 6926966ab: desce com média
+  acima de 17,33 ms (≈57,7 fps) e espera > 6 ms; sobe só abaixo de 17,0 ms.
+- Brutal Doom v21 + Lexicon slaughter (PZST01, ~4000 objetos): 43–54 fps, limitado pela CPU (tic 15 ms,
+  ShotgunGuy1/Imp/`BDECWindowColision1` ×792 do Brutal Doom); GPU 10–12 ms a 75%.
+- Logs em `evidence/hw/2026-10-14-v1.0.0/`.
+- **Console, motor 6926966ab:** Freedoom 2 MAP01 58,1–60,1 fps (era 54,6–57), resolução 74–78%.
+  Lexicon slaughter (sem Brutal): 52–60 fps; uma janela a 52 fps esperava 4,9 ms pela GPU (limite era 6 ms).
+  Motor 387dc8279: a espera sustentada soma o acquire do frame anterior, limite 4 ms; um travamento de
+  carregamento conta na média como no máximo dois vsyncs. Logs em `evidence/hw/2026-10-14-dynres-band/`.
+- **Console, motor 387dc8279:** Lexicon slaughter, MOC201 (Maps of Chaos 1, ~315 objetos), ~5 min: 59,3–60,0 fps
+  em todas as janelas de 5 s, resolução variando entre 60% e 100% conforme a cena (GPU 10,2 ms). O hub ficou em
+  33–37 fps (não importa). Mapa mais leve que o dos barris (DKTS01 Arch Bridge, ~800 objetos).
+  Logs em `evidence/hw/2026-10-14-dynres-acquire/`.
+- **Console, 1.0.1 (mesmo código de 387dc8279), Lexicon slaughter:** DSV101 Insurgents (~1200 objetos, ~4 min)
+  58,8–60,3 fps depois do início do mapa (primeira janela 54,9), resolução 60–100%; SF1201 Exodus cannonball
+  (~480 objetos) 59,2–60 fps. Logs em `evidence/hw/2026-10-14-v1.0.1/`.
+
+## Project Brutality, WadFusion e correções finais (console, 2026-10-14)
+
+- **Project Brutality** (`Project_Brutality-master.pk3`, versão do GitHub de 2026-03-14, 63 mil arquivos): carrega
+  sem erro de script (leitura dos scripts 11,5 s; 577 MB lidos do SD). MAP01/MAP02 a 55–60 fps em combate; CPU
+  folgada (tic 2–5 ms, `PB_BarrelHeatSmoke` o mais caro). A cena fica no piso de 60% porque o 2D (HUD) custa
+  4,3–5,5 ms; sem o visor do capacete, 1,4–1,8 ms, resolução 81–85% e 58–60 fps. Modelo "Project Brutality" no
+  launcher (`project?brutality*.pk3`). Logs em `evidence/hw/2026-10-14-pb-first/` e `2026-10-14-tartarus-pbvisor/`.
+- **Shader 2D enxuto** (`EFF_SIMPLE2D`, motor a1d3a1e79): só o caminho 2D do `main.fp` para imagens 2D com o
+  material padrão; idêntico pixel a pixel no Ryujinx. No console, PB com o visor: 2D/present 3,7–4,9 ms (antes
+  4,3–5,5). `rd_vk_simple2d 0` volta ao caminho antigo. O `perf.log` mostra imagens 2D e área por frame.
+- **Brutal Doom v21 + Lexicon slaughter, DKTS01 Arch Bridge:** na sala grande, 3600 → 7500 objetos e 12–14 fps.
+  CPU: tic de 44–56 ms (800 `Imp` do Brutal Doom = 13,8 ms, 134 `TehArchvile`, ~1200 alvos de headshot/perna,
+  colisão 6,7 ms, 400 objetos criados por tic); GPU 9 ms. O mesmo mapa sem o Brutal Doom: 60 fps no começo,
+  56 fps com a cena cheia. Logs em `2026-10-14-tartarus-pbvisor/` e `2026-10-14-simple2d/`.
+- **Travamento ao sair (corrigido no 1.1.0):** PB + WadFusion, tela preta ao sair: `nvk_FreeDescriptorSets` vindo da
+  lista de objetos de um frame ainda em voo, liberada depois de o gerenciador de descriptor sets destruir os
+  pools. O dispositivo agora esvazia os frames pendentes logo depois de a GPU parar. Logs em `2026-10-14-crash/`.
+- **Travada de ~0,3 s ao pegar a roupa antirradiação no PB (corrigido para as próximas vezes, 1.1.0):** a imagem
+  de 1472×2160 da HUD era decodificada e enviada naquele frame; a lista de texturas pré-carregadas agora guarda
+  também imagens grandes da HUD (≥ 256×256).
+- **WadFusion** gerado de novo pelo usuário (v1.6.1): carrega e roda; PB + Sigil E5M1 a 57–60 fps. O aviso de
+  `compat_nombf21` em `maps_id1.txt` não tem efeito. No menu de episódios o Legacy of Rust aparece como
+  "The Vulcan Abyss" e "Counterfeit Eden".
+- **Legacy of Rust + PB, LR_MAP08 (1.1.0):** 48–60 fps com ~1000 objetos. CPU ~20 ms por frame (cena 7 ms para
+  ~670 itens, HUD do PB 2,5 ms, monstros 5 ms por tic) e GPU 11,5 ms com a cena no piso de 60%: os dois perto do
+  limite. O `engine-stderr.log` tinha ~1000 linhas de avisos do `mpg123` (sons MP3 do PB com lixo no começo),
+  gravadas no SD durante o jogo; o 1.1.1 liga `MPG123_QUIET`. Logs em `2026-10-14-lr-pb/`.
+
+- **Falta de memória em partida longa (corrigido no 1.1.2):** PB + WadFusion, LR_MAP08, ~11 min: "Could not
+  realloc 24263712 bytes". Toda textura de sprite, gore e arma já vista ficava na GPU até o fim do mapa, e cada
+  início de mapa ainda carregava a lista de pré-carregamento inteira (já com 2000 imagens, de quatro sessões).
+  Agora: liberação de texturas (acima de `rd_vk_texevict_mb`, 2300 MB de heap, sprites/decalques/imagens da HUD
+  sem uso há 30 s perdem a cópia na GPU e voltam quando reaparecem; no Ryujinx 2–4 ms por passada, no máximo a
+  cada 30 s); lista de pré-carregamento por ordem de uso, com orçamento de 256 MB (`rd_vk_texwarm_mb`). O
+  `perf.log` mostra o heap em uso a cada 5 s e o erro de memória diz quem pediu. Base do PB + WadFusion no
+  Ryujinx: ~1,2–1,7 GB. Logs em `evidence/hw/2026-10-15-oom/`.
+
+- **PB + TNT por 26 minutos (console, 1.1.2):** sem falta de memória (pico ~2,37 GB, uma liberação de texturas de
+  ~28 ms). Mas o PB estava **sem efeitos sonoros** desde o primeiro teste: o libsndfile da imagem Docker tinha sido
+  compilado sem Ogg/Vorbis (o toolchain do devkitPro liga `CMAKE_FIND_PACKAGE_PREFER_CONFIG` e os portlibs só têm
+  arquivos pkg-config), e os 1433 sons Ogg do PB falhavam ao decodificar e eram marcados vazios. 1.1.3: libsndfile
+  com Vorbis/FLAC/Opus; no Ryujinx, 0 sons descartados (antes, todos). O `perf.log` conta os pedidos de som e por que
+  tocaram ou não. Quedas de fps com fumaça de arma colada na câmera: efeitos puros a menos de 20 unidades não são
+  desenhados e esmaecem até 48 (`rd_fx_nearcull`, `rd_fx_nearfade`). Logs em `evidence/hw/2026-10-16-tnt-pb/`.
+
+- **Travamentos de meio segundo a um segundo (corrigido no 1.1.4):** PB + WadFusion, Master Levels ML_MAP01–05,
+  ~17 min por sessão, três sessões (1.1.3). Os únicos travamentos em jogo (0,8–1,2 s) eram a liberação de texturas:
+  no PB o heap fica perto de 2,3 GB, então ela rodava a cada 30 s, e destruir as imagens custa ~0,23 ms cada
+  (845 ms para 3682 no começo do quadro seguinte). Agora as imagens vão para uma fila e saem 4 por quadro
+  (`rd_vk_texevict_perframe`), sem esperar a GPU nem refazer todos os descritores; imagens usadas por mais de um
+  material ficam. Ryujinx (LR_MAP08 + PB, limite forçado em 1500 MB): 6065 imagens em 25 s, heap 1712 → 1610 MB,
+  nenhum quadro acima de 30 ms (1.1.2: 223–235 ms por passada; `evidence/ryujinx/130-lr-evict-gradual`). O visor
+  do traje antirradiação do PB (1472×2160) custava 313 ms ao ser pego: imagens grandes da HUD não são mais
+  liberadas e continuam no pré-carregamento (até 64 MB) mesmo com o heap acima de 1,8 GB.
+  Quedas com fumaça, mísseis e inimigos explodindo: a GPU ficou em 10–13 ms por quadro (abaixo dos 16,7 ms); o
+  limite é a CPU — lógica do PB de 8–12 ms por quadro (~400 manchas de sangue, ~140 pedaços de corpo, fumaça de
+  barris) e ações isoladas de 13–22 ms (`A_Explode` de granada e foguete, gibs do Imp). Os outros picos longos
+  eram troca de mapa, carregar e gravar o jogo. Logs em `evidence/hw-2026-10-18-v113/`.
+
+## Limitações conhecidas (projeto encerrado)
+
+- Brutal Doom ou Project Brutality em mapas slaughter gigantes (milhares de monstros): limitados pela CPU do
+  Switch (scripts dos mods; 12–14 fps com 7500 objetos). Não há ajuste de resolução que resolva.
+- Project Brutality em combate com explosões: 36–55 fps nos momentos de mais gore (CPU; a quantidade de sangue e
+  pedaços se ajusta nas opções do próprio PB).
+- Project Brutality: carregamento longo (leitura dos scripts ~11 s; 577 MB lidos do SD); o visor do capacete
+  custa ~3 ms de GPU (desligá-lo no menu do PB dá resolução mais alta).
+- Mesa SDK: cópia guardada no release `deps-mesa-26.2.4-606441c9` deste repositório (o artefato original do
+  danfromtico/mesa-switch expira em 2027-01-05); `scripts/build.sh` e o CI baixam dela.
+- Lightmaps ainda sobem por cópia (compute) no Vulkan; nenhum mod testado usa.
+- Sessões longas e modo dock: não se aplicam (mapas não duram horas; Switch Lite).
