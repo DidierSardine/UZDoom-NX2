@@ -1,4 +1,5 @@
 #include "app.h"
+#include "i18n.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,16 +15,16 @@ namespace rdoom {
 // palette and layout
 // ---------------------------------------------------------------------------
 
-static const uint32_t kText = Rgba(242, 234, 226);
-static const uint32_t kMuted = Rgba(176, 156, 146);
-static const uint32_t kDim = Rgba(118, 100, 94);
-static const uint32_t kAccent = Rgba(255, 106, 28);
+static const uint32_t kText = Rgba(243, 244, 244);
+static const uint32_t kMuted = Rgba(160, 170, 174);
+static const uint32_t kDim = Rgba(122, 122, 123);
+static const uint32_t kAccent = Rgba(46, 237, 252);
 static const uint32_t kAmber = Rgba(255, 196, 90);
 static const uint32_t kRed = Rgba(232, 48, 36);
 static const uint32_t kGreen = Rgba(92, 214, 128);
-static const uint32_t kPanel = Rgba(16, 8, 8, 214);
-static const uint32_t kPanelHi = Rgba(36, 14, 10, 230);
-static const uint32_t kBorder = Rgba(255, 106, 28, 80);
+static const uint32_t kPanel = Rgba(6, 14, 18, 214);
+static const uint32_t kPanelHi = Rgba(8, 40, 52, 230);
+static const uint32_t kBorder = Rgba(46, 237, 252, 80);
 static const uint32_t kVulkan = Rgba(196, 28, 44);
 
 static const int kW = 1280, kH = 720;
@@ -63,14 +64,14 @@ static std::string HumanSize(uint64_t b)
 
 static const char *QualityLabel(const std::string &q)
 {
-	if (q == "low") return "Basse";
-	if (q == "high") return "Haute";
-	return "Stock (recommandé)";
+	if (q == "low") return L("Low");
+	if (q == "high") return L("High");
+	return L("Stock (recommended)");
 }
 
 static std::string FpsLabel(int fps)
 {
-	return fps == 0 ? std::string("Sans limite") : std::to_string(fps) + " FPS";
+	return fps == 0 ? std::string(L("No limit")) : std::to_string(fps) + " FPS";
 }
 
 static std::string ScaleLabel(float s)
@@ -82,9 +83,9 @@ static std::string ScaleLabel(float s)
 
 static const char *SkillName(int s)
 {
-	static const char *names[] = { "Choisir dans le menu", "1 — Très facile", "2 — Facile",
-	                               "3 — Normal", "4 — Difficile", "5 — Cauchemar" };
-	return names[std::max(0, std::min(5, s))];
+	static const char *const names[] = { "Choose from the menu", "1 — Very easy", "2 — Easy",
+	                                     "3 — Normal", "4 — Hard", "5 — Nightmare" };
+	return L(names[std::max(0, std::min(5, s))]);
 }
 
 // ---------------------------------------------------------------------------
@@ -100,14 +101,21 @@ void LauncherApp::Init()
 {
 	TextInit();
 	now_ = plat_.NowMs();
+	// the interface language comes first: the splash below is already translated
+	{
+		LauncherSettings early;
+		std::string ignored;
+		LoadLauncherSettings(paths_, early, ignored);
+		SetLanguage(LangFromCode(early.language));
+	}
 	// first frame while the library is scanned (large pk3 files take a moment)
 	{
 		Canvas &c = plat_.BeginDraw();
-		c.Clear(Rgba(8, 3, 3));
+		c.Clear(Rgba(3, 6, 8));
 		LoadImageFile(PathJoin(paths_.Art(), "splash.jpg"), bgMain_);
 		if (bgMain_.Valid())
 			c.Blit(bgMain_, 0, 0);
-		DrawTextCentered(c, Font::Body, 22, kW / 2, 560, kMuted, "Chargement de la bibliothèque…");
+		DrawTextCentered(c, Font::Body, 22, kW / 2, 560, kMuted, L("Loading library…"));
 		plat_.EndDraw();
 		bgMain_.Release();
 	}
@@ -122,7 +130,7 @@ void LauncherApp::Init()
 			cards_[t] = std::move(img);
 	}
 	if (!bgMain_.Valid())
-		loadWarnings_.push_back("Images du launcher absentes de launcher/ (couleurs unies).");
+		loadWarnings_.push_back(L("Launcher images missing from launcher/ (plain colours)."));
 	LoadAll();
 	stack_ = { Screen::Home };
 }
@@ -131,11 +139,12 @@ void LauncherApp::LoadAll()
 {
 	std::string warn;
 	LoadLauncherSettings(paths_, settings_, warn);
+	SetLanguage(LangFromCode(settings_.language));
 	if (!warn.empty())
 		loadWarnings_.push_back(warn);
 	defs_ = LoadIwadDefs(info_.enginePk3);
 	if (defs_.empty())
-		loadWarnings_.push_back("game_support.pk3 absent : IWAD identifiées par leur nom seulement.");
+		loadWarnings_.push_back(L("game_support.pk3 missing: IWADs identified by file name only."));
 	store_.Load();
 	for (const auto &p : store_.Problems())
 		loadWarnings_.push_back(p);
@@ -163,7 +172,7 @@ void LauncherApp::SetCurrent(const std::string &id)
 	settings_.lastProfile = id;
 	std::string err;
 	if (!SaveLauncherSettings(paths_, settings_, err))
-		ToastMsg("Enregistrement impossible : " + err, true);
+		ToastMsg(L("Cannot save: ") + err, true);
 }
 
 void LauncherApp::SaveCurrent()
@@ -173,7 +182,7 @@ void LauncherApp::SaveCurrent()
 		return;
 	std::string err;
 	if (!store_.Save(*p, err))
-		ToastMsg("Erreur à l'enregistrement du profil : " + err, true);
+		ToastMsg(L("Error while saving the profile: ") + err, true);
 }
 
 ResolvedProfile LauncherApp::ResolveCurrent()
@@ -205,7 +214,7 @@ std::vector<std::string> LauncherApp::ProfilesUsing(const std::string &ref, bool
 			else if (p.iwad.empty())
 				for (const auto &c : p.iwadCandidates)
 					if (ToLower(c) == ToLower(PathFileName(ref)))
-						out.push_back(p.name + " (modèle)");
+						out.push_back(p.name + L(" (template)"));
 		}
 		else
 		{
@@ -296,7 +305,7 @@ void LauncherApp::Draw(Canvas &c)
 	if (bg.Valid())
 		c.Blit(bg, 0, 0);
 	else
-		c.GradientV(0, 0, kW, kH, Rgba(30, 8, 6), Rgba(6, 2, 2));
+		c.GradientV(0, 0, kW, kH, Rgba(6, 24, 30), Rgba(2, 4, 5));
 	switch (s)
 	{
 	case Screen::Home: DrawHome(c); break;
@@ -370,9 +379,9 @@ static void DrawButtonGlyph(Canvas &c, int x, int y, const std::string &label)
 	const bool round = label.size() == 1 && (label == "A" || label == "B" || label == "X" || label == "Y");
 	const int w = round ? 26 : std::max(30, TextWidth(Font::Bold, 15, label) + 14);
 	if (round)
-		c.FillCircle(x + 13, y + 13, 13, Rgba(236, 228, 220));
+		c.FillCircle(x + 13, y + 13, 13, Rgba(232, 236, 238));
 	else
-		c.FillRound(x, y, w, 26, 8, Rgba(236, 228, 220));
+		c.FillRound(x, y, w, 26, 8, Rgba(232, 236, 238));
 	DrawTextCentered(c, Font::Bold, 15, x + w / 2, y + 3, Rgba(20, 10, 10), label);
 }
 
@@ -423,7 +432,7 @@ void LauncherApp::DrawProfileCard(Canvas &c, const Profile &p, int x, int y, int
 		}
 	}
 	else
-		c.GradientV(x, y, w, h, Rgba(40, 12, 8), Rgba(10, 4, 4));
+		c.GradientV(x, y, w, h, Rgba(8, 36, 46), Rgba(10, 4, 4));
 	c.GradientV(x, y + h / 2, w, h - h / 2, Rgba(0, 0, 0, 0), Rgba(0, 0, 0, 200));
 	if (selected)
 	{
@@ -566,7 +575,7 @@ void LauncherApp::TryLaunch()
 	Profile *p = Current();
 	if (!p)
 	{
-		Message("Aucun profil", "Créez ou choisissez un profil avant de lancer.");
+		Message(L("No profile"), L("Create or choose a profile before launching."));
 		return;
 	}
 	ResolvedProfile r = ResolveProfile(*p, lib_, defs_);
@@ -580,7 +589,7 @@ void LauncherApp::TryLaunch()
 	}
 	if (!r.runnable)
 	{
-		Message(r.pendingInstall ? "Installation incomplète" : "Lancement impossible", errors);
+		Message(r.pendingInstall ? L("Installation incomplete") : L("Cannot launch"), errors);
 		return;
 	}
 	// mods that declare the same cvar stop UZDoom at start-up ("cvar ... already exists")
@@ -590,7 +599,7 @@ void LauncherApp::TryLaunch()
 			if (m)
 				mods.push_back({ m->info.fileName, m->info.path });
 		for (const auto &clash : FindCvarClashes(mods))
-			warnings += "• " + clash + " : ces mods ne fonctionnent probablement pas ensemble (le jeu s'arrête sur une erreur). S'il s'agit d'épisodes ou de versions du même mod, n'en activez qu'un.\n";
+			warnings += "• " + clash + L(" : these mods probably do not work together (the game stops with an error). If they are episodes or versions of the same mod, enable only one.\n");
 	}
 	auto go = [this, r]() {
 		Profile *p = Current();
@@ -607,7 +616,7 @@ void LauncherApp::TryLaunch()
 		std::string err;
 		if (!PrepareEngineIni(*p, paths_, err))
 		{
-			Message("Erreur de préparation du profil", err);
+			Message(L("Error preparing the profile"), err);
 			return;
 		}
 		MakeDirs(paths_.SaveDir(p->id));
@@ -635,7 +644,7 @@ void LauncherApp::TryLaunch()
 		finished_ = true;
 	};
 	if (!warnings.empty())
-		Ask("Avertissements", warnings + "\nLancer quand même ?", { "Annuler", "Lancer" }, [go](int b) { if (b == 1) go(); });
+		Ask(L("Warnings"), warnings + L("\nLaunch anyway?"), { L("Cancel"), L("Launch") }, [go](int b) { if (b == 1) go(); });
 	else
 		go();
 }
@@ -645,7 +654,8 @@ void LauncherApp::TryLaunch()
 // ---------------------------------------------------------------------------
 
 static const char *kHomeItems[] = {
-	"Lancer", "Profils", "Bibliothèque d'IWAD", "Bibliothèque de mods", "Modifier le profil", "Réglages", "Diagnostic", "Quitter",
+	// English; translated with L() where they are drawn
+	"Launch", "Profiles", "IWAD library", "Mod library", "Edit profile", "Settings", "Diagnostics", "Quit",
 };
 static const int kHomeCount = 8;
 
@@ -686,7 +696,7 @@ void LauncherApp::UpdateHome(const InputFrame &in)
 		case 5: Push(Screen::Settings); break;
 		case 6: Push(Screen::Diagnostics); break;
 		case 7:
-			Ask("Quitter", "Fermer UZDoom NX2 et revenir au menu homebrew ?", { "Annuler", "Quitter" }, [this](int b) {
+			Ask(L("Quit"), L("Close UZDoom NX2 and go back to the homebrew menu?"), { L("Cancel"), L("Quit") }, [this](int b) {
 				if (b == 1)
 				{
 					result_ = Result::Exit;
@@ -697,7 +707,7 @@ void LauncherApp::UpdateHome(const InputFrame &in)
 		}
 	}
 	if (in.down & BtnB)
-		Ask("Quitter", "Fermer UZDoom NX2 et revenir au menu homebrew ?", { "Annuler", "Quitter" }, [this](int b) {
+		Ask(L("Quit"), L("Close UZDoom NX2 and go back to the homebrew menu?"), { L("Cancel"), L("Quit") }, [this](int b) {
 			if (b == 1)
 			{
 				result_ = Result::Exit;
@@ -714,7 +724,7 @@ void LauncherApp::DrawHome(Canvas &c)
 		c.Blit(logo_, 22, 14);
 	else
 		DrawText(c, Font::Display, 110, 48, 20, kAccent, "UZDoom NX2");
-	DrawText(c, Font::Body, 16, 50, 150, kMuted, "UZDoom pour Nintendo Switch 2  •  Vulkan  •  fréquences d'origine");
+	DrawText(c, Font::Body, 16, 50, 150, kMuted, L("UZDoom for Nintendo Switch 2  •  Vulkan  •  stock clocks"));
 
 	// menu
 	const int mx = 48, my = 232, mh = 50;
@@ -729,7 +739,7 @@ void LauncherApp::DrawHome(Canvas &c)
 	{
 		const bool sel = i == st.sel;
 		const uint32_t col = sel ? Rgba(255, 255, 255) : (i == 0 ? kAmber : kText);
-		DrawText(c, Font::Display, 36, mx + 24, my + i * mh + 2, col, Upper(kHomeItems[i]));
+		DrawText(c, Font::Display, 36, mx + 24, my + i * mh + 2, col, Upper(L(kHomeItems[i])));
 	}
 
 	// active profile panel
@@ -738,12 +748,12 @@ void LauncherApp::DrawHome(Canvas &c)
 	Profile *p = Current();
 	if (!p)
 	{
-		DrawTextWrapped(c, Font::Body, 22, px + 32, py + 40, pw - 64, kText, "Aucun profil. Ouvrez PROFILS et créez-en un à partir d'un modèle.");
+		DrawTextWrapped(c, Font::Body, 22, px + 32, py + 40, pw - 64, kText, L("No profile. Open PROFILES and create one from a template."));
 		return;
 	}
 	ResolvedProfile r = ResolveProfile(*p, lib_, defs_);
-	DrawText(c, Font::Body, 16, px + 28, py + 18, kMuted, "PROFIL ACTIF");
-	DrawTextRight(c, Font::Body, 16, px + pw - 28, py + 18, kDim, "L / R pour changer");
+	DrawText(c, Font::Body, 16, px + 28, py + 18, kMuted, L("ACTIVE PROFILE"));
+	DrawTextRight(c, Font::Body, 16, px + pw - 28, py + 18, kDim, L("L / R to switch"));
 	DrawProfileCard(c, *p, px + 28, py + 48, 384, 216, false);
 	// IWAD thumbnail (TITLEPIC from the IWAD itself) over the card corner
 	if (r.iwad)
@@ -766,7 +776,7 @@ void LauncherApp::DrawHome(Canvas &c)
 		dy += 34;
 	};
 	std::string iwadText = r.iwad ? r.iwad->info.title + "  (" + PathFileName(r.iwad->ref) + ")"
-	                              : (p->iwad.empty() ? std::string("—") : p->iwad + "  [absent]");
+	                              : (p->iwad.empty() ? std::string("—") : p->iwad + L("  [missing]"));
 	row("IWAD", iwadText, r.iwad ? kText : kRed);
 	std::string modsText;
 	int enabled = 0;
@@ -775,21 +785,21 @@ void LauncherApp::DrawHome(Canvas &c)
 		enabled++;
 		modsText += (modsText.empty() ? "" : "  ") + std::to_string(enabled) + ". " + PathFileName(m->ref);
 	}
-	row("Mods", enabled ? std::to_string(enabled) + " actif(s) : " + modsText : std::string("Aucun"), kText);
+	row("Mods", enabled ? std::to_string(enabled) + L(" enabled: ") + modsText : std::string(L("None")), kText);
 	// renderer line with the badge
-	DrawText(c, Font::Body, 16, px + 28, dy + 3, kDim, "RENDU");
+	DrawText(c, Font::Body, 16, px + 28, dy + 3, kDim, L("RENDERER"));
 	if (p->video.renderer == Renderer::Vulkan)
 	{
 		DrawChip(c, px + 190, dy - 1, "VULKAN", kVulkan, Rgba(255, 255, 255), 18);
-		DrawText(c, Font::Body, 18, px + 300, dy + 1, kMuted, "OunceVK (Mesa NVK) • par défaut");
+		DrawText(c, Font::Body, 18, px + 300, dy + 1, kMuted, L("OunceVK (Mesa NVK) • default"));
 	}
 	else
 	{
-		DrawChip(c, px + 190, dy - 1, Upper(RendererLabel(p->video.renderer)), Rgba(80, 70, 66), kText, 18);
-		DrawText(c, Font::Body, 18, px + 340, dy + 1, kAmber, "secondaire (Vulkan recommandé)");
+		DrawChip(c, px + 190, dy - 1, Upper(RendererLabel(p->video.renderer)), Rgba(70, 76, 80), kText, 18);
+		DrawText(c, Font::Body, 18, px + 340, dy + 1, kAmber, L("secondary (Vulkan recommended)"));
 	}
 	dy += 34;
-	row("Vidéo", ScaleLabel(p->video.internalScale) + "  •  " + FpsLabel(p->video.fpsLimit) + "  •  " + QualityLabel(p->video.quality), kText);
+	row(L("Video"), ScaleLabel(p->video.internalScale) + "  •  " + FpsLabel(p->video.fpsLimit) + "  •  " + QualityLabel(p->video.quality), kText);
 
 	// status
 	dy += 6;
@@ -806,7 +816,7 @@ void LauncherApp::DrawHome(Canvas &c)
 	if (r.runnable && shown == 0)
 	{
 		c.FillCircle(px + 36, dy + 12, 6, kGreen);
-		DrawText(c, Font::Body, 18, px + 52, dy, kGreen, "Prêt à jouer");
+		DrawText(c, Font::Body, 18, px + 52, dy, kGreen, L("Ready to play"));
 	}
 
 	// start button
@@ -815,25 +825,25 @@ void LauncherApp::DrawHome(Canvas &c)
 	const bool can = r.runnable;
 	if (can)
 		c.FillRound(bx - 6, by - 6, bw + 12, bh + 12, 14, WithAlpha(kAccent, (int)(50 + 60 * pulse)));
-	c.FillRound(bx, by, bw, bh, 10, can ? kAccent : Rgba(90, 60, 54));
+	c.FillRound(bx, by, bw, bh, 10, can ? kAccent : Rgba(60, 80, 88));
 	c.GradientV(bx + 4, by + 4, bw - 8, bh / 2 - 4, Rgba(255, 255, 255, 60), Rgba(255, 255, 255, 0));
-	DrawTextCentered(c, Font::Display, 40, bx + bw / 2 + 14, by + 9, can ? Rgba(24, 6, 2) : kMuted, can ? "LANCER" : "INCOMPLET");
+	DrawTextCentered(c, Font::Display, 40, bx + bw / 2 + 14, by + 9, can ? Rgba(24, 6, 2) : kMuted, can ? L("LAUNCH") : L("INCOMPLETE"));
 	DrawButtonGlyph(c, bx + 18, by + 17, "+");
 
 	// warnings banner (applet mode, load problems)
 	SystemInfo si = plat_.Info();
 	std::string banner;
 	if (si.appletMode)
-		banner = "Mode applet : peu de mémoire. Lancez le homebrew en maintenant R sur un jeu (mode titre).";
+		banner = L("Applet mode: little memory. Start the homebrew by holding R over a game (title mode).");
 	else if (!loadWarnings_.empty())
 		banner = loadWarnings_.front();
 	if (!banner.empty())
 	{
-		c.FillRound(418, 62, 822, 38, 8, Rgba(90, 30, 8, 220));
+		c.FillRound(418, 62, 822, 38, 8, Rgba(35, 120, 135, 220));
 		DrawText(c, Font::Body, 17, 434, 70, kAmber, banner, 790);
 	}
 
-	DrawHints(c, { { "A", "Choisir" }, { "L/R", "Profil" }, { "-", "Modifier" }, { "+", "Lancer" } });
+	DrawHints(c, { { "A", L("Select") }, { "L/R", L("Profile") }, { "-", L("Edit") }, { "+", L("Launch") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -865,8 +875,8 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 		auto t = BuiltinTemplates();
 		for (auto &p : t)
 			names.push_back(p.name);
-		names.push_back("À partir du profil actuel");
-		Choose("Nouveau profil", names, [this, t](int i) {
+		names.push_back(L("From the current profile"));
+		Choose(L("New profile"), names, [this, t](int i) {
 			if (i < 0)
 				return;
 			std::string err;
@@ -882,14 +892,14 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 			else
 			{
 				std::string name = t[i].name;
-				Keyboard("Nom du profil", name, 48, name);
+				Keyboard(L("Profile name"), name, 48, name);
 				if (!store_.Create(t[i].templateId, name, created, err))
 				{
 					ToastMsg(err, true);
 					return;
 				}
 			}
-			ToastMsg("Profil créé : " + created.name);
+			ToastMsg(L("Profile created: ") + created.name);
 			SetCurrent(created.id);
 			editId_ = created.id;
 			Push(Screen::Editor);
@@ -902,7 +912,7 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 	if (in.down & BtnA)
 	{
 		SetCurrent(sel.id);
-		ToastMsg("Profil actif : " + sel.name);
+		ToastMsg(L("Active profile: ") + sel.name);
 		Pop();
 		return;
 	}
@@ -914,7 +924,7 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 	}
 	if (in.down & BtnMinus)
 	{
-		Choose(sel.name, { "Modifier", "Dupliquer", "Renommer", "Valeurs par défaut", "Exporter", "Importer un profil…", "Supprimer" },
+		Choose(sel.name, { L("Edit"), L("Duplicate"), L("Rename"), L("Restore defaults"), L("Export"), L("Import profile…"), L("Delete") },
 		       [this, sel](int a) {
 			std::string err;
 			Profile out;
@@ -922,32 +932,32 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 			{
 			case 0: editId_ = sel.id; Push(Screen::Editor); break;
 			case 1:
-				if (store_.Duplicate(sel.id, out, err)) ToastMsg("Dupliqué : " + out.name);
+				if (store_.Duplicate(sel.id, out, err)) ToastMsg(L("Duplicated: ") + out.name);
 				else ToastMsg(err, true);
 				break;
 			case 2: {
 				std::string name = sel.name;
-				if (Keyboard("Nouveau nom", sel.name, 48, name) && name != sel.name)
+				if (Keyboard(L("New name"), sel.name, 48, name) && name != sel.name)
 				{
-					if (store_.Rename(sel.id, name, err)) ToastMsg("Renommé");
+					if (store_.Rename(sel.id, name, err)) ToastMsg(L("Renamed"));
 					else ToastMsg(err, true);
 				}
 				break;
 			}
 			case 3:
-				Ask("Valeurs par défaut", "Remettre toutes les options de \"" + sel.name + "\" par défaut ? L'IWAD et les mods sont conservés. Une copie va dans backup/.",
-				    { "Annuler", "Restaurer" }, [this, sel](int b) {
+				Ask(L("Restore defaults"), L("Reset every option of \"") + sel.name + L("\" to defaults? The IWAD and mods are kept. A copy goes to backup/."),
+				    { L("Cancel"), L("Restore") }, [this, sel](int b) {
 					std::string e;
 					if (b == 1)
 					{
-						if (store_.RestoreDefaults(sel.id, e)) ToastMsg("Valeurs par défaut restaurées");
+						if (store_.RestoreDefaults(sel.id, e)) ToastMsg(L("Defaults restored"));
 						else ToastMsg(e, true);
 					}
 				});
 				break;
 			case 4: {
 				std::string path;
-				if (store_.Export(sel.id, path, err)) Message("Exporté", "Fichier enregistré dans :\n" + path);
+				if (store_.Export(sel.id, path, err)) Message(L("Exported"), L("File saved to:\n") + path);
 				else ToastMsg(err, true);
 				break;
 			}
@@ -958,26 +968,26 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 						files.push_back(e.name);
 				if (files.empty())
 				{
-					Message("Importer", "Placez des fichiers .json de profil dans\n" + paths_.Export());
+					Message(L("Import"), L("Put profile .json files in\n") + paths_.Export());
 					break;
 				}
-				Choose("Importer depuis export/", files, [this, files](int i) {
+				Choose(L("Import from export/"), files, [this, files](int i) {
 					if (i < 0) return;
 					std::string e;
 					Profile p;
-					if (store_.Import(PathJoin(paths_.Export(), files[i]), p, e)) ToastMsg("Importé : " + p.name);
-					else Message("Échec de l'import", e);
+					if (store_.Import(PathJoin(paths_.Export(), files[i]), p, e)) ToastMsg(L("Imported: ") + p.name);
+					else Message(L("Import failed"), e);
 				});
 				break;
 			}
 			case 6:
-				Ask("Supprimer le profil", "Supprimer \"" + sel.name + "\" ? Les fichiers d'IWAD, de mods et les sauvegardes NE sont PAS effacés ; une copie du profil va dans backup/.",
-				    { "Annuler", "Supprimer" }, [this, sel](int b) {
+				Ask(L("Delete profile"), L("Delete \"") + sel.name + L("\"? IWAD, mod and save files are NOT deleted; a copy of the profile goes to backup/."),
+				    { L("Cancel"), L("Delete") }, [this, sel](int b) {
 					std::string e;
 					if (b != 1) return;
 					if (store_.Remove(sel.id, e))
 					{
-						ToastMsg("Profil supprimé");
+						ToastMsg(L("Profile deleted"));
 						if (currentId_ == sel.id && !store_.All().empty())
 							SetCurrent(store_.All().front().id);
 					}
@@ -993,7 +1003,7 @@ void LauncherApp::UpdateProfiles(const InputFrame &in)
 void LauncherApp::DrawProfiles(Canvas &c)
 {
 	State &st = states_[Screen::Profiles];
-	DrawHeader(c, "Profils", std::to_string(store_.All().size()) + " profils • chacun avec son IWAD, ses mods, sa configuration et ses sauvegardes");
+	DrawHeader(c, L("Profiles"), std::to_string(store_.All().size()) + L(" profiles • each with its own IWAD, mods, settings and saves"));
 	const auto &all = store_.All();
 	const int cols = 3, cw = 368, ch = 207, gx = 30, gy = 92;
 	const int x0 = 48, y0 = 150;
@@ -1012,12 +1022,12 @@ void LauncherApp::DrawProfiles(Canvas &c)
 		sub += r.iwad ? "  •  " + PathFileName(r.iwad->ref) : "";
 		DrawText(c, Font::Body, 16, x + 18, y + ch - 18, kMuted, sub, cw - 36);
 		if (p.id == currentId_)
-			DrawChip(c, x + 14, y + 12, "ACTIF", kAccent, Rgba(20, 6, 2), 15);
+			DrawChip(c, x + 14, y + 12, L("ACTIVE"), kAccent, Rgba(20, 6, 2), 15);
 		if (!r.runnable)
 		{
 			const bool unset = p.iwad.empty() && p.iwadCandidates.empty();
-			const char *chip = r.pendingInstall ? "INCOMPLET" : unset ? "CONFIGURER" : "ERREUR";
-			DrawChip(c, x + cw - TextWidth(Font::Bold, 15, chip) - 34, y + 12, chip, r.pendingInstall || unset ? Rgba(120, 80, 10) : Rgba(130, 20, 16), kText, 15);
+			const char *chip = r.pendingInstall ? L("INCOMPLETE") : unset ? L("SET UP") : L("ERROR");
+			DrawChip(c, x + cw - TextWidth(Font::Bold, 15, chip) - 34, y + 12, chip, r.pendingInstall || unset ? Rgba(120, 80, 10) : Rgba(3, 63, 83), kText, 15);
 		}
 		if (sel)
 		{
@@ -1030,7 +1040,7 @@ void LauncherApp::DrawProfiles(Canvas &c)
 				}
 		}
 	}
-	DrawHints(c, { { "A", "Activer" }, { "X", "Modifier" }, { "Y", "Nouveau" }, { "-", "Actions" }, { "B", "Retour" } });
+	DrawHints(c, { { "A", L("Activate") }, { "X", L("Edit") }, { "Y", L("New") }, { "-", L("Actions") }, { "B", L("Back") } });
 }
 
 } // namespace rdoom

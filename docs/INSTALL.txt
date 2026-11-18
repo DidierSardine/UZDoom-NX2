@@ -1,0 +1,56 @@
+UZDoom NX2 - installation (Nintendo Switch 2, kaiHEN)
+====================================================
+
+UZDoom NX2 is an unofficial port of UZDoom 5.0.3 to the Nintendo Switch 2
+under kaiHEN, rendered with Vulkan (OunceVK), with its own launcher.
+
+1. Copy the "switch" folder of this package to the ROOT of the SD card.
+   Result: sdmc:/switch/uzdoom-nx2/uzdoom-nx2.nro with the .pk3 files next to
+   it, and the free Freedoom IWADs in sdmc:/switch/uzdoom-nx2/iwads/.
+
+2. Optional: add your own IWADs to  sdmc:/switch/uzdoom-nx2/iwads/
+   (doom.wad, doom2.wad, plutonia.wad, tnt.wad, heretic.wad, hexen.wad ...
+   from games you own).
+
+3. Optional: put mods and map packs in  sdmc:/switch/uzdoom-nx2/mods/
+   (.pk3 .wad .zip .pk7 .deh .bex .ipk3; subfolders allowed)
+
+4. Start kaiHEN, then start a game while holding R to open hbmenu, and choose
+   UZDoom NX2. (The homebrew then runs in the game's process, with all its
+   memory.)
+
+5. In the launcher: choose a profile (L/R), check the IWAD and mods, press +.
+   The language (English, French, Portuguese) is in Settings > Language.
+
+Launcher controls
+  A select   B back   L/R change profile   + launch   - edit profile
+  Mod list: A enable/disable, Y move (D-Pad), X remove, + add
+
+Console safety (NAND)
+  * The program writes ONLY inside sdmc:/switch/uzdoom-nx2. A firewall,
+    installed before anything else runs, refuses every create, write,
+    delete or rename anywhere else (even elsewhere on the SD card).
+  * It never opens the NAND, system saves or system settings: those functions
+    are not even in the binary (checked at every build by
+    tests/check_nand_safety.sh).
+  * If the firewall cannot be installed, the program refuses to start.
+  * Refused writes are recorded in logs/rdoom.log ("fsguard").
+
+Folders (everything is in switch/uzdoom-nx2/)
+  iwads/ mods/            your files (never deleted)
+  profiles/               profiles (.json)
+  config/engine/          engine settings per profile
+  saves/<profile>/        saves per profile
+  screenshots/            in-game screenshots
+  cache/                  thumbnails, Vulkan pipeline cache
+  logs/                   rdoom.log, engine.log, engine-session.txt, crash.log
+  launcher/               launcher images
+  backup/ export/         safety copies and exported profiles
+  licenses/               licences and credits
+
+Clocks
+  Stock console clocks only. No overclocking.
+
+If something goes wrong
+  Send the contents of switch/uzdoom-nx2/logs/ (crash.log,
+  engine-session.txt, rdoom.log, engine.log, engine-stderr.log).

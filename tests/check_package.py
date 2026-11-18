@@ -59,6 +59,8 @@ def check_nro(path):
 
 
 def is_iwad(path):
+    if path.lower().endswith((".txt", ".md")):
+        return False
     try:
         with open(path, "rb") as f:
             return f.read(4) == b"IWAD"
@@ -74,14 +76,15 @@ def main():
         "soundfonts/uzdoom.sf2", "fm_banks/GENMIDI.GS.wopl", "VERSION.txt",
         "launcher/bg_main.jpg", "launcher/bg_inner.jpg", "launcher/splash.jpg", "launcher/logo_400.png",
         "launcher/card_freedoom2.jpg", "launcher/card_brutality.jpg", "launcher/card_custom.jpg",
-        "iwads/LISEZ-MOI.txt", "mods/LISEZ-MOI.txt",
+        "iwads/README.txt", "mods/README.txt", "iwads/freedoom1.wad", "iwads/freedoom2.wad",
+        "licenses/freedoom/COPYING.txt", "licenses/uzdoom-branding/BRANDING-LICENSE.md", "licenses/uzdoom-branding/UZDoom Logo.txt",
         "licenses/GPL-3.0-UZDoom.txt", "licenses/THIRD_PARTY_NOTICES.md", "licenses/OFL-Poppins.txt", "licenses/OFL-BebasNeue.txt",
         "licenses/MESA-MIT.txt", "licenses/LIBNX-ISC.txt",
     ]
     for r in required:
         p = os.path.join(sd, r)
         check(os.path.isfile(p) and os.path.getsize(p) > 0, "present: switch/uzdoom-nx2/" + r)
-    check(os.path.isfile(os.path.join(dist, "UZDoom-NX2", "LISEZ-MOI.txt")), "present: LISEZ-MOI.txt at the package root")
+    check(os.path.isfile(os.path.join(dist, "UZDoom-NX2", "README.txt")), "present: README.txt at the package root")
     check(os.path.isfile(os.path.join(dist, "uzdoom-nx2.nro")), "present: dist/uzdoom-nx2.nro")
 
     if os.path.isfile(os.path.join(sd, "uzdoom-nx2.nro")):
@@ -111,14 +114,14 @@ def main():
         with zipfile.ZipFile(os.path.join(dist, z)) as zf:
             names = zf.namelist()
             check("switch/uzdoom-nx2/uzdoom-nx2.nro" in names, z + " contains switch/uzdoom-nx2/uzdoom-nx2.nro")
-            outside = [n for n in names if not n.startswith("switch/uzdoom-nx2/") and n != "LISEZ-MOI.txt"]
+            outside = [n for n in names if not n.startswith("switch/uzdoom-nx2/") and n != "README.txt"]
             check(not outside, z + ": every file goes to switch/uzdoom-nx2/ (outside: %r)" % outside[:5])
             for n in names:
                 if n.lower().endswith((".wad", ".iwad", ".ipk3")):
                     h = hashlib.sha256(zf.read(n)).hexdigest()
                     check(h in ALLOWED_IWADS, "%s: %s is an allowed free IWAD" % (z, n))
-            if "Freedoom" in z:
-                check("switch/uzdoom-nx2/licenses/freedoom/COPYING.txt" in names, z + " carries the Freedoom licence")
+            check("switch/uzdoom-nx2/iwads/freedoom2.wad" in names, z + " ships Freedoom")
+            check("switch/uzdoom-nx2/licenses/freedoom/COPYING.txt" in names, z + " carries the Freedoom licence")
 
     sums = os.path.join(dist, "SHA256SUMS.txt")
     if os.path.isfile(sums):

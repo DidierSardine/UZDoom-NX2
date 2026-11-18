@@ -16,6 +16,7 @@ add_library(rdoom_launcher_core STATIC
 	src/core/profile.cpp
 	src/core/library.cpp
 	src/core/launch.cpp
+	src/core/i18n.cpp
 	src/core/stb_impl.cpp)
 target_include_directories(rdoom_launcher_core PUBLIC src/core third_party)
 # third-party single-header code: keep its warnings out of the build log

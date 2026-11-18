@@ -1,4 +1,5 @@
 #include "launch.h"
+#include "i18n.h"
 #include "fsutil.h"
 #include "log.h"
 
@@ -67,7 +68,7 @@ LaunchPlan BuildLaunchPlan(const Profile &p, const ResolvedProfile &r, const Pat
 	plan.engineIni = paths.EngineConfigFile(p.id);
 	plan.saveDir = paths.SaveDir(p.id);
 	auto &a = plan.argv;
-	a.push_back("RDoom");
+	a.push_back("uzdoom");
 	if (r.iwad)
 	{
 		a.push_back("-iwad");
@@ -105,6 +106,14 @@ LaunchPlan BuildLaunchPlan(const Profile &p, const ResolvedProfile &r, const Pat
 	if (p.gameplay.fast) a.push_back("-fast");
 	if (p.gameplay.noMonsters) a.push_back("-nomonsters");
 	if (p.gameplay.respawn) a.push_back("-respawn");
+	// the launcher's language: for the port's loading screen and messages
+	// (-nxlang, removed before the engine sees the command line) and for
+	// UZDoom's own menus and messages
+	a.push_back("-nxlang");
+	a.push_back(LangCode(GetLanguage()));
+	a.push_back("+set");
+	a.push_back("language");
+	a.push_back(EngineLanguage(GetLanguage()));
 	for (const auto &kv : ProfileCvars(p))
 	{
 		a.push_back("+set");
@@ -234,7 +243,7 @@ bool PrepareEngineIni(const Profile &p, const Paths &paths, std::string &err)
 	WriteResult r = WriteFileAtomic(file, out);
 	if (r != WriteResult::Ok)
 	{
-		err = std::string("config du moteur : ") + WriteResultName(r);
+		err = std::string(L("engine config: ")) + WriteResultName(r);
 		return false;
 	}
 	return true;
@@ -261,12 +270,13 @@ bool LoadLauncherSettings(const Paths &paths, LauncherSettings &s, std::string &
 			s.extraModDirs = j["extra_mod_dirs"].get<std::vector<std::string>>();
 		s.uiSounds = j.value("ui_sounds", true);
 		s.animations = j.value("animations", true);
+		s.language = LangCode(LangFromCode(j.value("language", std::string("en"))));
 	}
 	catch (const std::exception &e)
 	{
 		const std::string backup = PathJoin(paths.Backup(), "launcher.corrupt.json");
 		CopyFile(paths.LauncherConfigFile(), backup);
-		warning = std::string("launcher.json invalide (") + e.what() + ") ; valeurs par défaut restaurées, copie dans backup/";
+		warning = std::string(L("invalid launcher.json (")) + e.what() + L("); defaults restored, copy in backup/");
 		RLOG_E("settings", "%s", warning.c_str());
 		s = LauncherSettings();
 		return false;
@@ -284,6 +294,7 @@ bool SaveLauncherSettings(const Paths &paths, const LauncherSettings &s, std::st
 	j["extra_mod_dirs"] = s.extraModDirs;
 	j["ui_sounds"] = s.uiSounds;
 	j["animations"] = s.animations;
+	j["language"] = s.language;
 	WriteResult r = WriteFileAtomic(paths.LauncherConfigFile(), j.dump(2) + "\n");
 	if (r != WriteResult::Ok)
 	{

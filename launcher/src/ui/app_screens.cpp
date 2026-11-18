@@ -1,5 +1,6 @@
 // RDoom launcher - editor, libraries, settings and diagnostics screens.
 #include "app.h"
+#include "i18n.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,10 +12,10 @@
 
 namespace rdoom {
 
-static const uint32_t kText = Rgba(242, 234, 226);
-static const uint32_t kMuted = Rgba(176, 156, 146);
-static const uint32_t kDim = Rgba(118, 100, 94);
-static const uint32_t kAccent = Rgba(255, 106, 28);
+static const uint32_t kText = Rgba(243, 244, 244);
+static const uint32_t kMuted = Rgba(160, 170, 174);
+static const uint32_t kDim = Rgba(122, 122, 123);
+static const uint32_t kAccent = Rgba(46, 237, 252);
 static const uint32_t kAmber = Rgba(255, 196, 90);
 static const uint32_t kRed = Rgba(232, 48, 36);
 static const uint32_t kGreen = Rgba(92, 214, 128);
@@ -53,12 +54,12 @@ static const char *CategoryPt(ModCategory c)
 {
 	switch (c)
 	{
-	case ModCategory::MapPack: return "Pack de cartes";
-	case ModCategory::Gameplay: return "Gameplay";
-	case ModCategory::GameplayAndMaps: return "Gameplay + cartes";
-	case ModCategory::Resources: return "Ressources";
-	case ModCategory::Dehacked: return "Patch DeHackEd";
-	default: return "Inconnu";
+	case ModCategory::MapPack: return L("Map pack");
+	case ModCategory::Gameplay: return L("Gameplay");
+	case ModCategory::GameplayAndMaps: return L("Gameplay + maps");
+	case ModCategory::Resources: return L("Resources");
+	case ModCategory::Dehacked: return L("DeHackEd patch");
+	default: return L("Unknown");
 	}
 }
 
@@ -106,10 +107,10 @@ const char *FilterName(int f)
 {
 	switch (f)
 	{
-	case 0: return "Net (sans filtre)";
+	case 0: return L("Sharp (no filtering)");
 	case 4: return "Bilinear";
 	case 5: return "Trilinear";
-	default: return "Personnalisé";
+	default: return L("Custom");
 	}
 }
 
@@ -167,7 +168,7 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 		if (a)
 		{
 			std::string name = p->name, err;
-			if (Keyboard("Nom du profil", p->name, 48, name) && !name.empty())
+			if (Keyboard(L("Profile name"), p->name, 48, name) && !name.empty())
 			{
 				if (!store_.Rename(p->id, name, err))
 					ToastMsg(err, true);
@@ -178,7 +179,7 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 		if (a)
 		{
 			std::string d = p->description;
-			if (Keyboard("Description", p->description, 200, d))
+			if (Keyboard(L("Description"), p->description, 200, d))
 			{
 				p->description = d;
 				changed = true;
@@ -207,7 +208,7 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 		}
 		break;
 	case ER_Renderer:
-		ToastMsg("UZDoom NX2 utilise uniquement Vulkan (OunceVK).");
+		ToastMsg(L("UZDoom NX2 uses Vulkan only (OunceVK)."));
 		break;
 	case ER_Quality: {
 		const char *q[] = { "low", "stock", "high" };
@@ -245,7 +246,7 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 		if (a)
 		{
 			std::string w = p->gameplay.warp;
-			if (Keyboard("Carte de départ (ex. : MAP01, E1M1 ; vide = menu)", p->gameplay.warp, 8, w))
+			if (Keyboard(L("Start map (e.g. MAP01, E1M1; empty = menu)"), p->gameplay.warp, 8, w))
 			{
 				if (IsValidWarp(w))
 				{
@@ -253,7 +254,7 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 					changed = true;
 				}
 				else
-					ToastMsg("Nom de carte invalide (lettres et chiffres uniquement)", true);
+					ToastMsg(L("Invalid map name (letters and digits only)"), true);
 			}
 		}
 		break;
@@ -264,12 +265,12 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 		if (a)
 		{
 			const std::string id = p->id;
-			Ask("Valeurs par défaut", "Toutes les options reviennent aux valeurs du modèle. L'IWAD et les mods sont conservés.",
-			    { "Annuler", "Restaurer" }, [this, id](int b) {
+			Ask(L("Restore defaults"), L("Every option goes back to the template's defaults. The IWAD and mods are kept."),
+			    { L("Cancel"), L("Restore") }, [this, id](int b) {
 				std::string err;
 				if (b == 1)
 				{
-					if (store_.RestoreDefaults(id, err)) ToastMsg("Valeurs par défaut restaurées");
+					if (store_.RestoreDefaults(id, err)) ToastMsg(L("Defaults restored"));
 					else ToastMsg(err, true);
 				}
 			});
@@ -280,7 +281,7 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 	{
 		std::string err;
 		if (!store_.Save(*p, err))
-			ToastMsg("Erreur à l'enregistrement : " + err, true);
+			ToastMsg(L("Error while saving: ") + err, true);
 	}
 }
 
@@ -290,44 +291,44 @@ void LauncherApp::DrawEditor(Canvas &c)
 	const Profile *p = store_.Find(editId_);
 	if (!p)
 		return;
-	DrawHeader(c, "Modifier le profil", p->name + "  •  les changements sont enregistrés immédiatement");
+	DrawHeader(c, L("Edit profile"), p->name + L("  •  changes are saved immediately"));
 	ResolvedProfile r = ResolveProfile(*p, lib_, defs_);
 
 	struct Line { const char *section; std::string label, value; uint32_t col; };
 	std::vector<Line> rows(ER_Count);
-	auto onoff = [](bool b) { return std::string(b ? "Activé" : "Désactivé"); };
+	auto onoff = [](bool b) { return std::string(b ? L("On") : L("Off")); };
 	char buf[64];
-	rows[ER_Name] = { "PROFIL", "Nom", p->name, kText };
-	rows[ER_Desc] = { nullptr, "Description", p->description.empty() ? std::string("—") : p->description, kMuted };
-	rows[ER_Iwad] = { nullptr, "IWAD", r.iwad ? r.iwad->info.title + " (" + PathFileName(r.iwad->ref) + ")" : (p->iwad.empty() ? std::string("Choisir…") : p->iwad + " [absent]"), r.iwad ? kText : kRed };
+	rows[ER_Name] = { L("PROFILE"), L("Name"), p->name, kText };
+	rows[ER_Desc] = { nullptr, L("Description"), p->description.empty() ? std::string("—") : p->description, kMuted };
+	rows[ER_Iwad] = { nullptr, "IWAD", r.iwad ? r.iwad->info.title + " (" + PathFileName(r.iwad->ref) + ")" : (p->iwad.empty() ? std::string(L("Choose…")) : p->iwad + L(" [missing]")), r.iwad ? kText : kRed };
 	int en = 0;
 	for (auto &m : (p->mods.empty() ? r.filled.mods : p->mods))
 		if (m.enabled)
 			en++;
-	rows[ER_Mods] = { nullptr, "Mods et ordre de chargement", std::to_string(en) + " actif(s)  ›", kText };
-	rows[ER_Renderer] = { "VIDÉO", "Rendu", RendererLabel(p->video.renderer), p->video.renderer == Renderer::Vulkan ? kAmber : kText };
-	rows[ER_Quality] = { nullptr, "Qualité", p->video.quality == "low" ? "Basse" : p->video.quality == "high" ? "Haute" : "Stock (recommandé)", kText };
+	rows[ER_Mods] = { nullptr, L("Mods and load order"), std::to_string(en) + L(" enabled  ›"), kText };
+	rows[ER_Renderer] = { L("VIDEO"), L("Renderer"), RendererLabel(p->video.renderer), p->video.renderer == Renderer::Vulkan ? kAmber : kText };
+	rows[ER_Quality] = { nullptr, L("Quality"), p->video.quality == "low" ? L("Low") : p->video.quality == "high" ? L("High") : L("Stock (recommended)"), kText };
 	snprintf(buf, sizeof(buf), "%d%% (%d×%d)", (int)std::lround(p->video.internalScale * 100), (int)std::lround(1920 * p->video.internalScale), (int)std::lround(1080 * p->video.internalScale));
-	rows[ER_Scale] = { nullptr, "Résolution interne", buf, kText };
-	rows[ER_Fps] = { nullptr, "Limite d'IPS", p->video.fpsLimit ? std::to_string(p->video.fpsLimit) + " FPS" : std::string("Sans limite"), kText };
+	rows[ER_Scale] = { nullptr, L("Internal resolution"), buf, kText };
+	rows[ER_Fps] = { nullptr, L("FPS limit"), p->video.fpsLimit ? std::to_string(p->video.fpsLimit) + " FPS" : std::string(L("No limit")), kText };
 	rows[ER_Vsync] = { nullptr, "VSync", onoff(p->video.vsync), kText };
-	rows[ER_Lights] = { nullptr, "Lumières dynamiques", onoff(p->video.dynamicLights), kText };
-	rows[ER_Filter] = { nullptr, "Filtrage des textures", FilterName(p->video.textureFilter), kText };
+	rows[ER_Lights] = { nullptr, L("Dynamic lights"), onoff(p->video.dynamicLights), kText };
+	rows[ER_Filter] = { nullptr, L("Texture filtering"), FilterName(p->video.textureFilter), kText };
 	snprintf(buf, sizeof(buf), "%.2fx", p->input.lookSensitivity);
-	rows[ER_Sens] = { "COMMANDES", "Sensibilité de visée", buf, kText };
+	rows[ER_Sens] = { L("CONTROLS"), L("Aim sensitivity"), buf, kText };
 	snprintf(buf, sizeof(buf), "%d%%", (int)std::lround(p->input.deadzone * 100));
-	rows[ER_Dead] = { nullptr, "Zone morte des sticks", buf, kText };
-	rows[ER_Invert] = { nullptr, "Inverser la visée verticale", onoff(p->input.invertLook), kText };
-	rows[ER_Autoaim] = { "JEU", "Visée automatique", onoff(p->gameplay.autoaim > 0), kText };
-	rows[ER_Run] = { nullptr, "Toujours courir", onoff(p->gameplay.alwaysRun), kText };
-	rows[ER_Cross] = { nullptr, "Réticule", onoff(p->gameplay.crosshair > 0), kText };
-	const char *skills[] = { "Choisir dans le menu", "1 — Très facile", "2 — Facile", "3 — Normal", "4 — Difficile", "5 — Cauchemar" };
-	rows[ER_Skill] = { nullptr, "Difficulté de départ", skills[std::max(0, std::min(5, p->gameplay.skill))], kText };
-	rows[ER_Warp] = { nullptr, "Carte de départ", p->gameplay.warp.empty() ? std::string("Menu du jeu") : p->gameplay.warp, kText };
-	rows[ER_Fast] = { nullptr, "Monstres rapides (-fast)", onoff(p->gameplay.fast), kText };
-	rows[ER_NoMon] = { nullptr, "Sans monstres (-nomonsters)", onoff(p->gameplay.noMonsters), kText };
-	rows[ER_Respawn] = { nullptr, "Réapparition (-respawn)", onoff(p->gameplay.respawn), kText };
-	rows[ER_Reset] = { "MAINTENANCE", "Valeurs par défaut du profil", "›", kAmber };
+	rows[ER_Dead] = { nullptr, L("Stick dead zone"), buf, kText };
+	rows[ER_Invert] = { nullptr, L("Invert vertical aim"), onoff(p->input.invertLook), kText };
+	rows[ER_Autoaim] = { L("GAME"), L("Autoaim"), onoff(p->gameplay.autoaim > 0), kText };
+	rows[ER_Run] = { nullptr, L("Always run"), onoff(p->gameplay.alwaysRun), kText };
+	rows[ER_Cross] = { nullptr, L("Crosshair"), onoff(p->gameplay.crosshair > 0), kText };
+	const char *skills[] = { L("Choose from the menu"), L("1 — Very easy"), L("2 — Easy"), L("3 — Normal"), L("4 — Hard"), L("5 — Nightmare") };
+	rows[ER_Skill] = { nullptr, L("Starting skill"), skills[std::max(0, std::min(5, p->gameplay.skill))], kText };
+	rows[ER_Warp] = { nullptr, L("Start map"), p->gameplay.warp.empty() ? std::string(L("Game menu")) : p->gameplay.warp, kText };
+	rows[ER_Fast] = { nullptr, L("Fast monsters (-fast)"), onoff(p->gameplay.fast), kText };
+	rows[ER_NoMon] = { nullptr, L("No monsters (-nomonsters)"), onoff(p->gameplay.noMonsters), kText };
+	rows[ER_Respawn] = { nullptr, L("Respawn (-respawn)"), onoff(p->gameplay.respawn), kText };
+	rows[ER_Reset] = { L("MAINTENANCE"), L("Restore the profile's defaults"), "›", kAmber };
 
 	const int x = 48, y0 = 136, w = 760, rh = 42, visible = 12;
 	KeepVisible(st, ER_Count, visible);
@@ -354,15 +355,15 @@ void LauncherApp::DrawEditor(Canvas &c)
 	std::string help;
 	switch (st.sel)
 	{
-	case ER_Iwad: help = "L'IWAD est le jeu de base (DOOM II, Freedoom, WadFusion…). Placez les fichiers dans switch/uzdoom-nx2/iwads/."; break;
-	case ER_Mods: help = "Activez, désactivez et ordonnez les mods. L'ordre compte : les fichiers chargés après remplacent les précédents."; break;
-	case ER_Renderer: help = "UZDoom NX2 affiche uniquement avec Vulkan (OunceVK, le pilote NVK de Mesa pour Switch 2)."; break;
-	case ER_Quality: help = "Stock : sans SSAO, bloom, lens flare ni MSAA. Basse coupe aussi les lumières dynamiques et limite l'échelle à 75 %. Haute active le bloom et les ombres des lumières."; break;
-	case ER_Scale: help = "Résolution de rendu avant la mise à l'échelle à l'écran. Des valeurs plus basses soulagent les mods lourds."; break;
-	case ER_Fps: help = "30 ou 35 IPS donnent des images plus régulières avec les mods lourds ; 60 IPS pour le contenu léger. Les fréquences d'origine de la console ne sont jamais modifiées."; break;
-	case ER_Sens: case ER_Dead: case ER_Invert: help = "Valeurs appliquées aux Joy-Con et à la manette Pro au lancement. Les attributions de boutons faites dans le menu du jeu sont enregistrées dans ce profil."; break;
-	case ER_Warp: help = "Démarre directement sur la carte indiquée (ex. : MAP01). Laissez vide pour ouvrir le menu du jeu."; break;
-	default: help = "‹ › pour changer une valeur, A pour ouvrir. Chaque profil a sa configuration et ses sauvegardes."; break;
+	case ER_Iwad: help = L("The IWAD is the base game (DOOM II, Freedoom, WadFusion…). Put the files in switch/uzdoom-nx2/iwads/."); break;
+	case ER_Mods: help = L("Enable, disable and order the mods. Order matters: files loaded later override earlier ones."); break;
+	case ER_Renderer: help = L("UZDoom NX2 renders with Vulkan only (OunceVK, Mesa's NVK driver for Switch 2)."); break;
+	case ER_Quality: help = L("Stock: no SSAO, bloom, lens flare or MSAA. Low also turns dynamic lights off and limits the scale to 75%. High turns bloom and light shadows on."); break;
+	case ER_Scale: help = L("Resolution the game is drawn at before it is scaled to the screen. Lower values help heavy mods."); break;
+	case ER_Fps: help = L("30 or 35 FPS give steadier frame times with heavy mods; 60 FPS for light content. The console's stock clocks are never changed."); break;
+	case ER_Sens: case ER_Dead: case ER_Invert: help = L("Values applied to the Joy-Con and the Pro Controller when the game starts. Button bindings made in the game's menu are saved in this profile."); break;
+	case ER_Warp: help = L("Starts directly on the given map (e.g. MAP01). Leave empty to open the game's menu."); break;
+	default: help = L("‹ › to change a value, A to open. Each profile has its own settings and saves."); break;
 	}
 	DrawTextWrapped(c, Font::Body, 19, hx + 24, y0 + 50, hw - 48, kText, help, 12);
 
@@ -375,7 +376,7 @@ void LauncherApp::DrawEditor(Canvas &c)
 		c.FillCircle(hx + 30, py + 11, 5, is.level == IssueLevel::Error ? kRed : kAmber);
 		py += DrawTextWrapped(c, Font::Body, 16, hx + 44, py, hw - 64, is.level == IssueLevel::Error ? Rgba(255, 150, 140) : kAmber, is.text, 2);
 	}
-	DrawHints(c, { { "A", "Ouvrir/Changer" }, { "‹ ›", "Valeur" }, { "+", "Lancer" }, { "B", "Retour" } });
+	DrawHints(c, { { "A", L("Open/Change") }, { "‹ ›", L("Value") }, { "+", L("Launch") }, { "B", L("Back") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +397,7 @@ void LauncherApp::UpdateIwads(const InputFrame &in)
 	if (in.down & BtnY)
 	{
 		Rescan();
-		ToastMsg("Bibliothèque actualisée : " + std::to_string(lib_.Iwads().size()) + " IWAD(s)");
+		ToastMsg(L("Library refreshed: ") + std::to_string(lib_.Iwads().size()) + " IWAD(s)");
 		return;
 	}
 	if (items.empty() || !(in.down & BtnA))
@@ -404,9 +405,9 @@ void LauncherApp::UpdateIwads(const InputFrame &in)
 	const LibraryItem &it = items[st.sel];
 	if (it.info.status != FileStatus::Ok || !it.info.isIwad)
 	{
-		Message("Utilisation impossible", it.info.status != FileStatus::Ok
-			? it.info.fileName + " : fichier invalide (" + it.info.error + ")."
-			: it.info.fileName + " n'est pas une IWAD. Déplacez-le dans mods/ si c'est un mod.");
+		Message(L("Cannot use"), it.info.status != FileStatus::Ok
+			? it.info.fileName + L(" : invalid file (") + it.info.error + ")."
+			: it.info.fileName + L(" is not an IWAD. Move it to mods/ if it is a mod."));
 		return;
 	}
 	const std::string target = pickIwad_ ? editId_ : currentId_;
@@ -416,7 +417,7 @@ void LauncherApp::UpdateIwads(const InputFrame &in)
 	p->iwad = it.ref;
 	std::string err;
 	if (store_.Save(*p, err))
-		ToastMsg("IWAD de \"" + p->name + "\": " + it.info.title);
+		ToastMsg(L("IWAD of \"") + p->name + "\": " + it.info.title);
 	else
 		ToastMsg(err, true);
 	if (pickIwad_)
@@ -430,13 +431,13 @@ void LauncherApp::DrawIwads(Canvas &c)
 {
 	State &st = states_[Screen::Iwads];
 	const auto &items = lib_.Iwads();
-	DrawHeader(c, "Bibliothèque d'IWAD", pickIwad_ ? "Choisissez l'IWAD du profil" : std::to_string(items.size()) + " fichier(s) dans " + paths_.Iwads());
+	DrawHeader(c, L("IWAD library"), pickIwad_ ? L("Choose the profile's IWAD") : std::to_string(items.size()) + L(" file(s) in ") + paths_.Iwads());
 	const int x = 48, y0 = 136, w = 700, rh = 82, visible = 6;
 	KeepVisible(st, (int)items.size(), visible);
 	DrawPanel(c, x - 12, y0 - 12, w + 24, visible * rh + 24);
 	if (items.empty())
 		DrawTextWrapped(c, Font::Body, 21, x + 16, y0 + 20, w - 40, kText,
-		                "Aucune IWAD trouvée. Copiez par exemple freedoom2.wad ou doom2.wad dans switch/uzdoom-nx2/iwads/ sur la carte SD, puis appuyez sur Y.");
+		                L("No IWAD found. Copy for example freedoom2.wad or doom2.wad to switch/uzdoom-nx2/iwads/ on the SD card and press Y."));
 	for (int i = 0; i < visible && st.scroll + i < (int)items.size(); i++)
 	{
 		const int idx = st.scroll + i;
@@ -451,11 +452,11 @@ void LauncherApp::DrawIwads(Canvas &c)
 		DrawText(c, Font::Display, 30, x + 136, y + 4, kText, Up(it.info.title), w - 340);
 		DrawText(c, Font::Body, 16, x + 136, y + 44, kMuted, it.ref + "  •  " + Size(it.info.size), w - 340);
 		if (it.info.status != FileStatus::Ok)
-			DrawChip(c, x + w - 170, y + 22, "INVALIDE", Rgba(130, 20, 16), kText);
+			DrawChip(c, x + w - 170, y + 22, L("INVALID"), Rgba(3, 63, 83), kText);
 		else if (!it.info.isIwad)
-			DrawChip(c, x + w - 170, y + 22, "PAS UNE IWAD", Rgba(120, 80, 10), kText);
+			DrawChip(c, x + w - 170, y + 22, L("NOT AN IWAD"), Rgba(120, 80, 10), kText);
 		else
-			DrawChip(c, x + w - 170, y + 22, "DISPONIBLE", Rgba(24, 96, 52), kText);
+			DrawChip(c, x + w - 170, y + 22, L("AVAILABLE"), Rgba(24, 96, 52), kText);
 	}
 	DrawScrollbar(c, x + w + 4, y0, visible * rh, (int)items.size(), visible, st.scroll);
 
@@ -469,7 +470,7 @@ void LauncherApp::DrawIwads(Canvas &c)
 		if (const Image *t = thumbs_.Get(it, 400, 250))
 			c.Blit(*t, dx + 22, y0 + 6);
 		else
-			DrawTextCentered(c, Font::Body, 18, dx + 222, y0 + 118, kDim, it.info.hasTitlePic ? "création de la miniature…" : "pas de TITLEPIC");
+			DrawTextCentered(c, Font::Body, 18, dx + 222, y0 + 118, kDim, it.info.hasTitlePic ? L("making thumbnail…") : L("no TITLEPIC"));
 		int y = y0 + 270;
 		auto kv = [&](const std::string &k, const std::string &v, uint32_t col = kText) {
 			DrawText(c, Font::Body, 15, dx + 24, y + 2, kDim, Up(k));
@@ -477,15 +478,15 @@ void LauncherApp::DrawIwads(Canvas &c)
 			y += 28;
 		};
 		std::string type = it.info.archive == ArchiveType::Wad ? "WAD" : it.info.archive == ArchiveType::Zip ? "PK3/IPK3 (zip)" : it.info.archive == ArchiveType::SevenZip ? "PK7 (7z)" : "—";
-		kv("Jeu", it.info.iwadDef >= 0 ? defs_[it.info.iwadDef].name : (it.info.isIwad ? it.info.title : "—"));
-		kv("Type", type + (it.info.mapCount ? "  •  " + std::to_string(it.info.mapCount) + " cartes" : ""));
-		kv("État", it.info.status != FileStatus::Ok ? "Invalide : " + it.info.error : it.info.isIwad ? "Valide" : "PWAD/mod, pas une IWAD",
+		kv(L("Game"), it.info.iwadDef >= 0 ? defs_[it.info.iwadDef].name : (it.info.isIwad ? it.info.title : "—"));
+		kv(L("Type"), type + (it.info.mapCount ? "  •  " + std::to_string(it.info.mapCount) + L(" maps") : ""));
+		kv(L("Status"), it.info.status != FileStatus::Ok ? L("Invalid: ") + it.info.error : it.info.isIwad ? L("Valid") : L("PWAD/mod, not an IWAD"),
 		   it.info.status != FileStatus::Ok ? kRed : it.info.isIwad ? kGreen : kAmber);
 		auto users = ProfilesUsing(it.ref, true);
 		std::string u;
 		for (auto &s : users)
 			u += (u.empty() ? "" : ", ") + s;
-		kv("Profils", u.empty() ? "aucun" : u, kMuted);
+		kv(L("Profiles"), u.empty() ? L("none") : u, kMuted);
 		// compatibility with the current profile's mods
 		if (const Profile *p = store_.Find(pickIwad_ ? editId_ : currentId_))
 		{
@@ -493,12 +494,12 @@ void LauncherApp::DrawIwads(Canvas &c)
 			for (auto *m : r.mods)
 				if (!m->info.gameinfoIwad.empty() && ToLower(PathFileName(m->info.gameinfoIwad)) != ToLower(PathFileName(it.ref)))
 				{
-					kv("Avertissement", PathFileName(m->ref) + " attend " + m->info.gameinfoIwad, kAmber);
+					kv(L("Warning"), PathFileName(m->ref) + L(" expects ") + m->info.gameinfoIwad, kAmber);
 					break;
 				}
 		}
 	}
-	DrawHints(c, { { "A", pickIwad_ ? "Choisir" : "Utiliser dans le profil actif" }, { "Y", "Actualiser" }, { "B", "Retour" } });
+	DrawHints(c, { { "A", pickIwad_ ? L("Select") : L("Use in the active profile") }, { "Y", L("Rescan") }, { "B", L("Back") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -558,7 +559,7 @@ void LauncherApp::UpdateMods(const InputFrame &in)
 		{
 			const std::string f = mods[st.sel].file;
 			const std::string id = p->id;
-			Ask("Retirer du profil", "Retirer " + f + " de ce profil ? Le fichier reste sur la carte SD.", { "Annuler", "Retirer" },
+			Ask(L("Remove from profile"), L("Remove ") + f + L(" from this profile? The file stays on the SD card."), { L("Cancel"), L("Remove") },
 			    [this, id, f](int b) {
 				Profile *q = store_.FindMutable(id);
 				if (b != 1 || !q)
@@ -585,13 +586,13 @@ void LauncherApp::DrawMods(Canvas &c)
 	const Profile *p = store_.Find(editId_);
 	if (!p)
 		return;
-	DrawHeader(c, "Mods du profil", p->name + "  •  ordre de chargement : 1 est chargé en premier, le dernier remplace les précédents");
+	DrawHeader(c, L("Profile mods"), p->name + L("  •  load order: 1 loads first, the last one overrides the earlier ones"));
 	const int x = 48, y0 = 136, w = 1184, rh = 58, visible = 8;
 	KeepVisible(st, (int)p->mods.size(), visible);
 	DrawPanel(c, x - 12, y0 - 12, w + 24, visible * rh + 24);
 	if (p->mods.empty())
 		DrawTextWrapped(c, Font::Body, 21, x + 16, y0 + 20, w - 40, kText,
-		                "Aucun mod dans ce profil. Appuyez sur + pour en ajouter depuis la bibliothèque (switch/uzdoom-nx2/mods/).");
+		                L("No mod in this profile. Press + to add one from the library (switch/uzdoom-nx2/mods/)."));
 	// load order = position among the enabled mods
 	std::vector<int> order(p->mods.size(), 0);
 	for (size_t k = 0, n = 0; k < p->mods.size(); k++)
@@ -612,20 +613,20 @@ void LauncherApp::DrawMods(Canvas &c)
 		DrawText(c, Font::Bold, 21, x + 106, y + 4, m.enabled ? kText : kDim, PathFileName(m.file), 520);
 		std::string sub = it && it->info.title != PathStem(m.file) ? it->info.title : m.file;
 		if (m.optional)
-			sub += "  (facultatif)";
+			sub += L("  (optional)");
 		if (!m.enabled)
-			sub += "  •  désactivé, non chargé";
+			sub += L("  •  disabled, not loaded");
 		DrawText(c, Font::Body, 15, x + 106, y + 32, kMuted, sub, 520);
 		if (!it)
-			DrawChip(c, x + 660, y + 14, "ABSENT", Rgba(130, 20, 16), kText);
+			DrawChip(c, x + 660, y + 14, L("MISSING"), Rgba(3, 63, 83), kText);
 		else if (it->info.status != FileStatus::Ok)
-			DrawChip(c, x + 660, y + 14, "INVALIDE", Rgba(130, 20, 16), kText);
+			DrawChip(c, x + 660, y + 14, L("INVALID"), Rgba(3, 63, 83), kText);
 		else
 		{
-			DrawChip(c, x + 660, y + 14, Up(CategoryPt(it->info.category)), Rgba(60, 40, 34), kText);
+			DrawChip(c, x + 660, y + 14, Up(CategoryPt(it->info.category)), Rgba(40, 52, 58), kText);
 			std::string info = Size(it->info.size);
 			if (it->info.mapCount)
-				info += "  •  " + std::to_string(it->info.mapCount) + " cartes";
+				info += "  •  " + std::to_string(it->info.mapCount) + L(" maps");
 			if (it->info.hasZScript)
 				info += "  •  ZScript";
 			DrawTextRight(c, Font::Body, 16, x + w - 20, y + 18, kMuted, info);
@@ -633,9 +634,9 @@ void LauncherApp::DrawMods(Canvas &c)
 	}
 	DrawScrollbar(c, x + w + 4, y0, visible * rh, (int)p->mods.size(), visible, st.scroll);
 	if (moving_)
-		DrawHints(c, { { "D-Pad", "Déplacer" }, { "A", "Terminer" } });
+		DrawHints(c, { { "D-Pad", L("Move") }, { "A", L("Done") } });
 	else
-		DrawHints(c, { { "A", "Activer/Désactiver" }, { "Y", "Déplacer" }, { "X", "Retirer" }, { "+", "Ajouter" }, { "B", "Retour" } });
+		DrawHints(c, { { "A", L("Enable/Disable") }, { "Y", L("Move") }, { "X", L("Remove") }, { "+", L("Add") }, { "B", L("Back") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -655,7 +656,7 @@ void LauncherApp::UpdateModPicker(const InputFrame &in)
 	if (in.down & BtnY)
 	{
 		Rescan();
-		ToastMsg("Bibliothèque actualisée : " + std::to_string(lib_.Mods().size()) + " mod(s)");
+		ToastMsg(L("Library refreshed: ") + std::to_string(lib_.Mods().size()) + " mod(s)");
 		return;
 	}
 	if (items.empty() || !(in.down & BtnA))
@@ -663,12 +664,12 @@ void LauncherApp::UpdateModPicker(const InputFrame &in)
 	const LibraryItem &it = items[st.sel];
 	if (it.info.status != FileStatus::Ok)
 	{
-		Message("Fichier invalide", it.info.fileName + ": " + it.info.error);
+		Message(L("Invalid file"), it.info.fileName + ": " + it.info.error);
 		return;
 	}
 	if (it.info.isIwad)
 	{
-		Message("C'est une IWAD", it.info.fileName + " contient IWADINFO et doit servir d'IWAD. Déplacez-le dans iwads/.");
+		Message(L("This is an IWAD"), it.info.fileName + L(" contains IWADINFO and must be used as an IWAD. Move it to iwads/."));
 		return;
 	}
 	const std::string target = editId_.empty() ? currentId_ : editId_;
@@ -678,7 +679,7 @@ void LauncherApp::UpdateModPicker(const InputFrame &in)
 	for (auto &m : p->mods)
 		if (ToLower(m.file) == ToLower(it.ref))
 		{
-			ToastMsg("Déjà dans le profil \"" + p->name + "\"");
+			ToastMsg(L("Already in profile \"") + p->name + "\"");
 			return;
 		}
 	if (p->mods.empty() && !p->modPatterns.empty())
@@ -688,7 +689,7 @@ void LauncherApp::UpdateModPicker(const InputFrame &in)
 	p->mods.push_back(ref);
 	std::string err;
 	if (store_.Save(*p, err))
-		ToastMsg("Ajouté à \"" + p->name + "\" (position " + std::to_string(p->mods.size()) + ")");
+		ToastMsg(L("Added to \"") + p->name + L("\" (position ") + std::to_string(p->mods.size()) + ")");
 	else
 		ToastMsg(err, true);
 }
@@ -699,13 +700,13 @@ void LauncherApp::DrawModPicker(Canvas &c)
 	const auto &items = lib_.Mods();
 	const std::string target = editId_.empty() ? currentId_ : editId_;
 	const Profile *p = store_.Find(target);
-	DrawHeader(c, "Bibliothèque de mods", std::to_string(items.size()) + " fichier(s)  •  A ajoute au profil \"" + (p ? p->name : "") + "\"");
+	DrawHeader(c, L("Mod library"), std::to_string(items.size()) + L(" file(s)  •  A adds to profile \"") + (p ? p->name : "") + "\"");
 	const int x = 48, y0 = 136, w = 700, rh = 62, visible = 8;
 	KeepVisible(st, (int)items.size(), visible);
 	DrawPanel(c, x - 12, y0 - 12, w + 24, visible * rh + 24);
 	if (items.empty())
 		DrawTextWrapped(c, Font::Body, 21, x + 16, y0 + 20, w - 40, kText,
-		                "Aucun mod trouvé. Copiez des fichiers .pk3, .wad, .zip, .pk7 ou .deh dans switch/uzdoom-nx2/mods/, puis appuyez sur Y.");
+		                L("No mod found. Copy .pk3, .wad, .zip, .pk7 or .deh files to switch/uzdoom-nx2/mods/ and press Y."));
 	for (int i = 0; i < visible && st.scroll + i < (int)items.size(); i++)
 	{
 		const int idx = st.scroll + i;
@@ -724,13 +725,13 @@ void LauncherApp::DrawModPicker(Canvas &c)
 			sub += it.ref + "  •  ";
 		DrawText(c, Font::Body, 15, x + 20, y + 33, kMuted, sub + Size(it.info.size), w - 260);
 		if (it.info.status != FileStatus::Ok)
-			DrawChip(c, x + w - 200, y + 14, "INVALIDE", Rgba(130, 20, 16), kText);
+			DrawChip(c, x + w - 200, y + 14, L("INVALID"), Rgba(3, 63, 83), kText);
 		else if (it.info.isIwad)
-			DrawChip(c, x + w - 200, y + 14, "C'EST UNE IWAD", Rgba(120, 80, 10), kText);
+			DrawChip(c, x + w - 200, y + 14, L("THIS IS AN IWAD"), Rgba(120, 80, 10), kText);
 		else if (inProfile)
-			DrawChip(c, x + w - 200, y + 14, "DANS LE PROFIL #" + std::to_string(inProfile), Rgba(24, 96, 52), kText);
+			DrawChip(c, x + w - 200, y + 14, L("IN PROFILE #") + std::to_string(inProfile), Rgba(24, 96, 52), kText);
 		else
-			DrawChip(c, x + w - 200, y + 14, Up(CategoryPt(it.info.category)), Rgba(60, 40, 34), kText);
+			DrawChip(c, x + w - 200, y + 14, Up(CategoryPt(it.info.category)), Rgba(40, 52, 58), kText);
 	}
 	DrawScrollbar(c, x + w + 4, y0, visible * rh, (int)items.size(), visible, st.scroll);
 
@@ -747,36 +748,36 @@ void LauncherApp::DrawModPicker(Canvas &c)
 		};
 		std::string type = it.info.archive == ArchiveType::Wad ? "WAD" : it.info.archive == ArchiveType::Zip ? "PK3 (zip)"
 			: it.info.archive == ArchiveType::SevenZip ? "PK7 (7z)" : (it.info.hasDehacked ? "DeHackEd" : "—");
-		kv("Fichier", it.ref, kMuted);
-		kv("Format", type + "  •  " + Size(it.info.size));
-		kv("Catégorie", CategoryPt(it.info.category));
+		kv(L("File"), it.ref, kMuted);
+		kv(L("Format"), type + "  •  " + Size(it.info.size));
+		kv(L("Category"), CategoryPt(it.info.category));
 		std::string content;
-		if (it.info.mapCount) content += std::to_string(it.info.mapCount) + " cartes ";
+		if (it.info.mapCount) content += std::to_string(it.info.mapCount) + L(" maps ");
 		if (it.info.hasZScript) content += "ZScript ";
 		if (it.info.hasDecorate) content += "DECORATE ";
 		if (it.info.hasDehacked) content += "DEHACKED ";
 		if (it.info.hasMapinfo) content += "MAPINFO";
-		kv("Contenu", content.empty() ? (it.info.archive == ArchiveType::SevenZip ? "7z : lu par le moteur" : "recursos") : content);
+		kv(L("Contents"), content.empty() ? (it.info.archive == ArchiveType::SevenZip ? L("7z: read by the engine") : "recursos") : content);
 		if (!it.info.gameinfoIwad.empty())
-			kv("IWAD demandée", it.info.gameinfoIwad, kAmber);
+			kv(L("Requested IWAD"), it.info.gameinfoIwad, kAmber);
 		if (!it.info.gameinfoLoad.empty())
 		{
 			std::string deps;
 			for (auto &d : it.info.gameinfoLoad)
-				deps += (deps.empty() ? "" : ", ") + d + (lib_.FindMod(d) ? "" : " (absente)");
-			kv("Dépendances", deps, kAmber);
+				deps += (deps.empty() ? "" : ", ") + d + (lib_.FindMod(d) ? "" : L(" (missing)"));
+			kv(L("Dependencies"), deps, kAmber);
 		}
 		else
-			kv("Dépendances", "aucune déclarée (GAMEINFO)", kMuted);
+			kv(L("Dependencies"), L("none declared (GAMEINFO)"), kMuted);
 		if (it.info.status != FileStatus::Ok)
-			kv("Erreur", it.info.error, kRed);
+			kv(L("Error"), it.info.error, kRed);
 		auto users = ProfilesUsing(it.ref, false);
 		std::string u;
 		for (auto &s : users)
 			u += (u.empty() ? "" : ", ") + s;
-		kv("Profils", u.empty() ? "aucun" : u, kMuted);
+		kv(L("Profiles"), u.empty() ? L("none") : u, kMuted);
 	}
-	DrawHints(c, { { "A", "Ajouter au profil" }, { "Y", "Actualiser" }, { "B", "Retour" } });
+	DrawHints(c, { { "A", L("Add to profile") }, { "Y", L("Rescan") }, { "B", L("Back") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +787,7 @@ void LauncherApp::DrawModPicker(Canvas &c)
 void LauncherApp::UpdateSettings(const InputFrame &in)
 {
 	State &st = states_[Screen::Settings];
-	const int n = 7;
+	const int n = 8;
 	MoveList(st.sel, n, in);
 	if (in.down & BtnB)
 	{
@@ -797,21 +798,21 @@ void LauncherApp::UpdateSettings(const InputFrame &in)
 		return;
 	std::string err;
 	auto editDirs = [this](std::vector<std::string> &dirs, const std::string &what) {
-		std::vector<std::string> items = { "Ajouter un dossier…" };
+		std::vector<std::string> items = { L("Add a folder…") };
 		for (auto &d : dirs)
-			items.push_back("Retirer : " + d);
-		Choose("Dossiers supplémentaires : " + what, items, [this, &dirs, what](int i) {
+			items.push_back(L("Remove: ") + d);
+		Choose(L("Extra folders: ") + what, items, [this, &dirs, what](int i) {
 			if (i < 0)
 				return;
 			if (i == 0)
 			{
-				// nx2: read-only path (an extra library folder is only scanned and read)
-				std::string path = "sdmc:/switch/gzdoom/" + std::string(what == "IWADs" ? "iwads" : "pwads"); // nx2: read-only path
-				if (!Keyboard("Chemin du dossier", path, 200, path))
+				// an extra library folder is only scanned and read
+				std::string path = "sdmc:/";
+				if (!Keyboard(L("Folder path"), path, 200, path))
 					return;
 				if (!DirExists(path))
 				{
-					Message("Dossier introuvable", path + " n'existe pas sur la carte SD.");
+					Message(L("Folder not found"), path + L(" does not exist on the SD card."));
 					return;
 				}
 				dirs.push_back(path);
@@ -822,45 +823,52 @@ void LauncherApp::UpdateSettings(const InputFrame &in)
 			if (!SaveLauncherSettings(paths_, settings_, e))
 				ToastMsg(e, true);
 			Rescan();
-			ToastMsg("Bibliothèque actualisée");
+			ToastMsg(L("Library refreshed"));
 		});
 	};
 	switch (st.sel)
 	{
-	case 0: editDirs(settings_.extraIwadDirs, "IWADs"); break;
-	case 1: editDirs(settings_.extraModDirs, "mods"); break;
-	case 2:
+	case 0:
+	{
+		// English -> French -> Portuguese (‹ goes backwards)
+		int l = (int)GetLanguage() + ((in.repeat & BtnLeft) ? 2 : 1);
+		SetLanguage((Lang)(l % 3));
+		settings_.language = LangCode(GetLanguage());
+		if (!SaveLauncherSettings(paths_, settings_, err))
+			ToastMsg(err, true);
+		break;
+	}
+	case 1: editDirs(settings_.extraIwadDirs, "IWADs"); break;
+	case 2: editDirs(settings_.extraModDirs, "mods"); break;
+	case 3:
 		settings_.animations = !settings_.animations;
 		if (!SaveLauncherSettings(paths_, settings_, err))
 			ToastMsg(err, true);
 		break;
-	case 3:
-		Rescan();
-		ToastMsg("Bibliothèque actualisée : " + std::to_string(lib_.Iwads().size()) + " IWAD(s), " + std::to_string(lib_.Mods().size()) + " mod(s)");
-		break;
 	case 4:
-		Message("Fréquences d'origine",
-		        "UZDoom NX2 fonctionne uniquement avec la gestion d'énergie normale de la Nintendo Switch 2. Il n'a aucune option d'overclock, "
-		        "ne modifie pas les fréquences CPU, GPU ou mémoire et ne dépend d'aucun module système. "
-		        "Les performances viennent des réglages de résolution, de limite d'IPS et de qualité.");
+		Rescan();
+		ToastMsg(L("Library refreshed: ") + std::to_string(lib_.Iwads().size()) + " IWAD(s), " + std::to_string(lib_.Mods().size()) + " mod(s)");
 		break;
 	case 5:
-		Message("À propos d'UZDoom NX2",
-		        info_.version + "\n" + info_.engineVersion + "\n" + info_.gfxVersion + "\n\n"
-		        "Portage non officiel d'UZDoom pour Nintendo Switch 2 (kaiHEN), rendu Vulkan via OunceVK. Basé sur RDoom NX de Renan (Æon) (github.com/aeon1911/RDoom-NX). "
-		        "Ce n'est pas un produit d'id Software ni des mainteneurs d'UZDoom.\n\n"
-		        "Écritures limitées à sdmc:/switch/uzdoom-nx2 (pare-feu SD), aucune écriture NAND.\n"
-		        "\n"
-		        "Licence GPLv3 ; mentions des tiers dans switch/uzdoom-nx2/licenses/.");
+		Message(L("Stock clocks"),
+		        L("UZDoom NX2 only works with the Nintendo Switch 2's normal power management. It has no overclocking option, does not change CPU, GPU or memory clocks and depends on no system module. Performance comes from the resolution, FPS limit and quality settings."));
 		break;
 	case 6:
-		Ask("Réinitialiser le launcher", "Remettre les réglages globaux du launcher par défaut ? Les profils ne sont pas touchés.", { "Annuler", "Restaurer" },
+		Message(L("About UZDoom NX2"),
+		        info_.version + "\n" + info_.engineVersion + "\n" + info_.gfxVersion + "\n\n" +
+		        L("Unofficial port of UZDoom to the Nintendo Switch 2 (kaiHEN), rendered with Vulkan through OunceVK. Based on RDoom NX by Renan (Æon) (github.com/aeon1911/RDoom-NX). Not a product of id Software nor of the UZDoom maintainers.\n\nWrites limited to sdmc:/switch/uzdoom-nx2 (SD firewall), no NAND writes.\n") + "\n" +
+		        L("GPLv3 licence; third-party notices in switch/uzdoom-nx2/licenses/.") + "\n" +
+		        "UZDoom logo (c) 2025 The UZDoom Team, CC BY-SA 4.0.");
+		break;
+	case 7:
+		Ask(L("Reset launcher"), L("Reset the launcher's global settings to defaults? Profiles are not affected."), { L("Cancel"), L("Restore") },
 		    [this](int b) {
 			if (b != 1)
 				return;
-			std::string last = settings_.lastProfile, e;
+			std::string last = settings_.lastProfile, lang = settings_.language, e;
 			settings_ = LauncherSettings();
 			settings_.lastProfile = last;
+			settings_.language = lang;
 			if (!SaveLauncherSettings(paths_, settings_, e))
 				ToastMsg(e, true);
 			Rescan();
@@ -872,22 +880,23 @@ void LauncherApp::UpdateSettings(const InputFrame &in)
 void LauncherApp::DrawSettings(Canvas &c)
 {
 	State &st = states_[Screen::Settings];
-	DrawHeader(c, "Réglages", "Options globales du launcher (chaque profil garde les siennes)");
+	DrawHeader(c, L("Settings"), L("Global launcher options (each profile keeps its own)"));
 	auto list = [](const std::vector<std::string> &v) {
 		std::string s;
 		for (auto &d : v)
 			s += (s.empty() ? "" : ", ") + d;
-		return s.empty() ? std::string("nenhuma") : s;
+		return s.empty() ? std::string(L("none")) : s;
 	};
 	struct Row { std::string label, value; };
 	std::vector<Row> rows = {
-		{ "Dossiers d'IWAD supplémentaires", list(settings_.extraIwadDirs) },
-		{ "Dossiers de mods supplémentaires", list(settings_.extraModDirs) },
-		{ "Animations de l'interface", settings_.animations ? "Activées" : "Désactivées" },
-		{ "Actualiser les bibliothèques", "›" },
-		{ "Fréquences", "D'origine uniquement" },
-		{ "À propos et licences", "›" },
-		{ "Réinitialiser les réglages du launcher", "›" },
+		{ GetLanguage() == Lang::En ? std::string("Language") : std::string(L("Language")) + " / Language", LangName(GetLanguage()) },
+		{ L("Extra IWAD folders"), list(settings_.extraIwadDirs) },
+		{ L("Extra mod folders"), list(settings_.extraModDirs) },
+		{ L("Interface animations"), settings_.animations ? L("On") : L("Off") },
+		{ L("Rescan libraries"), "›" },
+		{ L("Clocks"), L("Stock only") },
+		{ L("About and licences"), "›" },
+		{ L("Reset launcher settings"), "›" },
 	};
 	const int x = 48, y0 = 136, w = 1184, rh = 60;
 	DrawPanel(c, x - 12, y0 - 12, w + 24, (int)rows.size() * rh + 24);
@@ -896,11 +905,11 @@ void LauncherApp::DrawSettings(Canvas &c)
 		const int y = y0 + i * rh;
 		SelRow(c, x, y, w, rh - 6, i == st.sel);
 		DrawText(c, Font::Body, 22, x + 22, y + 12, i == st.sel ? Rgba(255, 255, 255) : kMuted, rows[i].label);
-		DrawTextRight(c, Font::Bold, 20, x + w - 22, y + 14, i == 4 ? kGreen : kText, Ellipsize(Font::Bold, 20, rows[i].value, 640));
+		DrawTextRight(c, Font::Bold, 20, x + w - 22, y + 14, i == 5 ? kGreen : kText, Ellipsize(Font::Bold, 20, rows[i].value, 640));
 	}
 	DrawText(c, Font::Body, 17, 52, y0 + (int)rows.size() * rh + 30, kDim,
-	         "Les dossiers supplémentaires permettent d'utiliser des bibliothèques existantes (lecture seule), comme sdmc:/switch/gzdoom/iwads, sans copier de gros fichiers.");
-	DrawHints(c, { { "A", "Ouvrir/Changer" }, { "B", "Retour" } });
+	         L("Extra folders let you use existing libraries (read only), such as sdmc:/doom/iwads, without copying big files."));
+	DrawHints(c, { { "A", L("Open/Change") }, { "B", L("Back") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -917,21 +926,19 @@ void LauncherApp::UpdateDiagnostics(const InputFrame &in)
 	if (in.down & BtnY)
 	{
 		ReadFile(info_.lastSessionFile, lastSession_);
-		ToastMsg("Rapport de la dernière session rechargé");
+		ToastMsg(L("Last session report reloaded"));
 	}
 	if (in.down & BtnX)
 	{
-		Ask("Vider le cache des shaders",
-		    "Efface le cache de pipelines Vulkan (switch/uzdoom-nx2/cache). "
-		    "À utiliser si le jeu se fige ou se ferme avec \"device lost\". La partie suivante "
-		    "recompile les shaders (petites pauses). IWAD, mods, profils et sauvegardes ne sont pas touchés.",
-		    { "Annuler", "Vider" }, [this](int b) {
+		Ask(L("Clear shader cache"),
+		    L("Deletes the Vulkan pipeline cache (switch/uzdoom-nx2/cache). Use it if the game started freezing or closing with \"device lost\". The next game compiles the shaders again (short pauses). IWADs, mods, profiles and saves are not touched."),
+		    { L("Cancel"), L("Clear") }, [this](int b) {
 			if (b != 1)
 				return;
 			// only the program's own cache: nothing outside the sandbox is touched
 			int n = RemoveFile(PathJoin(paths_.Cache(), "uzdoom/vulkanpipelinecache")) ? 1 : 0;
 			RLOG_I("diag", "shader caches cleared by the user: %d files", n);
-			ToastMsg("Cache des shaders vidé (" + std::to_string(n) + " fichier(s))");
+			ToastMsg(L("Shader cache cleared (") + std::to_string(n) + L(" file(s))"));
 		});
 	}
 }
@@ -939,26 +946,26 @@ void LauncherApp::UpdateDiagnostics(const InputFrame &in)
 void LauncherApp::DrawDiagnostics(Canvas &c)
 {
 	State &st = states_[Screen::Diagnostics];
-	DrawHeader(c, "Diagnostic", "Versions, mémoire, rendu de la dernière session et problèmes détectés");
+	DrawHeader(c, L("Diagnostics"), L("Versions, memory, last session's renderer and problems found"));
 	SystemInfo si = plat_.Info();
 	std::vector<std::pair<std::string, uint32_t>> lines;
 	auto add = [&](const std::string &s, uint32_t col = kText) { lines.push_back({ s, col }); };
-	add("[VERSIONS]", kAccent);
-	add(info_.version + "  •  compilé le " + info_.buildDate);
+	add(L("[VERSIONS]"), kAccent);
+	add(info_.version + L("  •  built on ") + info_.buildDate);
 	add(info_.engineVersion);
 	add(info_.gfxVersion);
-	add("[SYSTÈME]", kAccent);
-	add(std::string("Mode d'exécution : ") + (si.appletMode ? "applet (mémoire limitée !)" : "application (titre, mémoire complète)"), si.appletMode ? kAmber : kGreen);
+	add(L("[SYSTEM]"), kAccent);
+	add(std::string(L("Run mode: ")) + (si.appletMode ? L("applet (limited memory!)") : L("application (title, full memory)")), si.appletMode ? kAmber : kGreen);
 	if (si.memTotal)
-		add("Mémoire du processus : " + Size(si.memUsed) + " utilisés sur " + Size(si.memTotal));
-	add("Espace libre sur la SD : " + (si.sdFree == UINT64_MAX ? std::string("desconhecido") : Size(si.sdFree)));
-	add(std::string("Console : ") + (si.docked ? "sur le dock (TV)" : "portable") + (si.firmware.empty() ? "" : "  •  firmware " + si.firmware));
+		add(L("Process memory: ") + Size(si.memUsed) + L(" used of ") + Size(si.memTotal));
+	add(L("Free space on the SD card: ") + (si.sdFree == UINT64_MAX ? std::string("desconhecido") : Size(si.sdFree)));
+	add(std::string(L("Console: ")) + (si.docked ? L("docked (TV)") : L("handheld")) + (si.firmware.empty() ? "" : "  •  firmware " + si.firmware));
 	if (!si.emulator.empty())
-		add("Environnement : " + si.emulator, kAmber);
-	add("Fréquences : d'origine (CPU/GPU/mémoire jamais modifiés)", kGreen);
-	add("[DERNIÈRE SESSION DU MOTEUR]", kAccent);
+		add(L("Environment: ") + si.emulator, kAmber);
+	add(L("Clocks: stock only (CPU/GPU/memory never changed)"), kGreen);
+	add(L("[LAST ENGINE SESSION]"), kAccent);
 	if (lastSession_.empty())
-		add("Aucune session enregistrée pour l'instant (" + info_.lastSessionFile + ")", kMuted);
+		add(L("No session recorded yet (") + info_.lastSessionFile + ")", kMuted);
 	else
 	{
 		size_t s = 0;
@@ -977,8 +984,8 @@ void LauncherApp::DrawDiagnostics(Canvas &c)
 		std::string lost;
 		if (ReadFile(PathJoin(paths_.Logs(), "gpu-lost-previous.txt"), lost) && !lost.empty())
 		{
-			add("[DERNIÈRE PANNE GPU (device lost)]", kAccent);
-			add("Le cache des shaders a été vidé automatiquement après.", kAmber);
+			add(L("[LAST GPU FAILURE (device lost)]"), kAccent);
+			add(L("The shader cache was cleared automatically after it."), kAmber);
 			size_t s0 = 0;
 			for (int k = 0; k < 14 && s0 < lost.size(); k++)
 			{
@@ -992,17 +999,17 @@ void LauncherApp::DrawDiagnostics(Canvas &c)
 			}
 		}
 	}
-	add("[BIBLIOTHÈQUE]", kAccent);
-	add(std::to_string(lib_.Iwads().size()) + " IWAD(s), " + std::to_string(lib_.Mods().size()) + " mod(s), " + std::to_string(store_.All().size()) + " profil(s), " + std::to_string(defs_.size()) + " définitions d'IWAD");
-	add("[PROBLÈMES]", kAccent);
+	add(L("[LIBRARY]"), kAccent);
+	add(std::to_string(lib_.Iwads().size()) + " IWAD(s), " + std::to_string(lib_.Mods().size()) + L(" mod(s), ") + std::to_string(store_.All().size()) + L(" profile(s), ") + std::to_string(defs_.size()) + L(" IWAD definitions"));
+	add(L("[PROBLEMS]"), kAccent);
 	if (loadWarnings_.empty())
-		add("Aucun problème au chargement des profils et réglages.", kGreen);
+		add(L("No problem loading profiles and settings."), kGreen);
 	for (auto &w : loadWarnings_)
 		add(w, kAmber);
-	add("[FICHIERS DE LOG]", kAccent);
+	add(L("[LOG FILES]"), kAccent);
 	add(PathJoin(paths_.Logs(), "rdoom.log") + "  (launcher)", kMuted);
-	add(PathJoin(paths_.Logs(), "engine.log") + "  (moteur)", kMuted);
-	add(PathJoin(paths_.Logs(), "last-launch.txt") + "  (dernière commande de lancement)", kMuted);
+	add(PathJoin(paths_.Logs(), "engine.log") + L("  (engine)"), kMuted);
+	add(PathJoin(paths_.Logs(), "last-launch.txt") + L("  (last launch command)"), kMuted);
 
 	const int x = 48, y0 = 136, rh = 30, visible = 17;
 	st.scroll = std::max(0, std::min(st.scroll, std::max(0, (int)lines.size() - visible)));
@@ -1014,7 +1021,7 @@ void LauncherApp::DrawDiagnostics(Canvas &c)
 		DrawText(c, head ? Font::Display : Font::Body, head ? 26 : 19, x + 16, y0 + i * rh + (head ? -1 : 3), l.second, l.first, 1150);
 	}
 	DrawScrollbar(c, x + 1188, y0, visible * rh, (int)lines.size(), visible, st.scroll);
-	DrawHints(c, { { "D-Pad", "Défiler" }, { "X", "Vider le cache des shaders" }, { "Y", "Recharger" }, { "B", "Retour" } });
+	DrawHints(c, { { "D-Pad", L("Scroll") }, { "X", L("Clear shader cache") }, { "Y", L("Reload") }, { "B", L("Back") } });
 }
 
 } // namespace rdoom

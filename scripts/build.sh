@@ -18,18 +18,12 @@ mkdir -p "$LOG_DIR"
 step() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-command -v docker >/dev/null || die "docker is required"
+for t in docker python3 magick sha256sum; do command -v "$t" >/dev/null || die "missing host tool: $t"; done
 docker info >/dev/null 2>&1 || die "docker daemon not reachable"
 docker image inspect ounce-devkit >/dev/null 2>&1 || die "build the ounce-devkit image first (see header)"
 
-FD_ZIP="$ROOT/third_party/freedoom/freedoom-0.13.0.zip"
-if [ ! -f "$ROOT/third_party/freedoom/freedoom-0.13.0/freedoom2.wad" ]; then
-	step "Freedoom 0.13.0 (BSD; host tests and the -Freedoom package)"
-	mkdir -p "$(dirname "$FD_ZIP")"
-	[ -f "$FD_ZIP" ] || curl -fsSL -o "$FD_ZIP" https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip || die "cannot download Freedoom"
-	echo "3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59  $FD_ZIP" | sha256sum -c - >/dev/null || die "Freedoom checksum mismatch"
-	(cd "$ROOT/third_party/freedoom" && unzip -q -o "$FD_ZIP")
-fi
+step "Freedoom 0.13.0 (shipped in the package)"
+(cd "$ROOT/third_party/freedoom" && sha256sum -c --quiet SHA256SUMS.txt) || die "third_party/freedoom: checksum mismatch"
 
 step "Toolchain image ($IMAGE)"
 docker build -q -f "$ROOT/docker/Dockerfile" -t "$IMAGE" "$ROOT/docker" > "$LOG_DIR/docker-image.log" 2>&1 \

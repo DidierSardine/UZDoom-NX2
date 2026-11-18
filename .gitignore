@@ -14,7 +14,6 @@
 /test-env/
 /evidence/
 /third_party/mesa-sdk/
-/third_party/freedoom/
 /vktest/build/
 /vktest/matrix/build/
 /vktest/*.nro
@@ -29,5 +28,6 @@ __pycache__/
 *.o
 *.pyc
 /engine/
-/third_party/freedoom/
 /assets/build/
+# Freedoom (BSD) is part of the project
+!/third_party/freedoom/*.wad

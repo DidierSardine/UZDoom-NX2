@@ -47,6 +47,7 @@ struct LauncherSettings
 	std::vector<std::string> extraModDirs;
 	bool uiSounds = true;
 	bool animations = true;
+	std::string language = "en";	// "en", "fr" or "pt" (i18n.h)
 };
 
 bool LoadLauncherSettings(const Paths &paths, LauncherSettings &s, std::string &warning);

@@ -1,67 +1,76 @@
-# AGENTS.md — UZDoom NX2 (à lire avant de toucher au projet)
+# AGENTS.md — UZDoom NX2 (read before changing the project)
 
-Portage de **UZDoom 5.0.3** sur **Nintendo Switch 2**, homebrew `.nro` lancé par
-**kaiHEN** (CFW non restreint), rendu **Vulkan** (OunceVK = NVK de Mesa) sur
-**libounce** (libnx pour Switch 2). Un seul exécutable : `uzdoom-nx2.nro`, qui
-contient le launcher (profils, IWAD, mods) et le moteur.
+Port of **UZDoom 5.0.3** (official tag `5.0.3`, commit `7910df71` of
+UZDoom/UZDoom) to the **Nintendo Switch 2**, as a homebrew `.nro` started by
+**kaiHEN** (unrestricted CFW), rendered with **Vulkan** (OunceVK = Mesa's NVK)
+on **libounce** (libnx for Switch 2). One executable, `uzdoom-nx2.nro`, holding
+the launcher (profiles, IWADs, mods) and the engine.
 
-Base : le fork moteur de RDoom-NX (aeon1911/RDoom-NX-engine, branche `rdoom-nx`,
-UZDoom 5.0.3 + 66 commits de portage Switch 1) et son launcher. Nos commits sont
-sur la branche `uzdoom-nx2` de `engine/` (dépôt git imbriqué, ignoré par le
-dépôt parent) ; la série est exportée dans `patches/`.
+Base: the RDoom NX engine fork (aeon1911/RDoom-NX-engine, branch `rdoom-nx`,
+UZDoom 5.0.3 + 66 Switch 1 commits, GPLv3) and its launcher. Our commits are on
+branch `uzdoom-nx2` of `engine/` (nested git repository, ignored by the parent
+repository); the whole series is exported in `patches/`.
 
-## Règle n°1 : ZÉRO écriture NAND, tout dans sdmc:/switch/uzdoom-nx2
+## Rule 1: ZERO NAND writes, everything in sdmc:/switch/uzdoom-nx2
 
-kaiHEN donne aux homebrews un accès FS complet (NAND comprise). Trois couches,
-à ne jamais affaiblir :
+kaiHEN gives homebrew full FS access (NAND included). Three layers, never to be
+weakened (details in `docs/SECURITY.md`):
 
-1. **Symboles** — `tests/check_nand_safety.sh` refuse le binaire si l'ELF final
-   contient une API libnx/libounce/libkaihen qui ouvre la NAND, des sauvegardes,
-   des stockages système, ou modifie réglages/contenus/tickets/appairage/
-   horloges/matériel. Il vérifie aussi que le pare-feu est lié, et que les
-   sources du portage n'utilisent ni IPC brut ni l'API FS sous la libc.
-2. **Pare-feu devoptab** — `engine/src/common/platform/posix/nx/nx2_fsguard.c`
-   remplace l'entrée `sdmc` de newlib dans `userAppInit` (avant tout
-   constructeur). Toute création/écriture/troncature/suppression/renommage/
-   mkdir/rmdir/chmod/utimes hors de `sdmc:/switch/uzdoom-nx2` échoue (EACCES).
-   Les autres périphériques FS sont démontés. Si l'installation échoue, le
-   programme affiche une erreur et ne démarre pas.
-3. **Politique de chemins** — `nx2_pathpolicy.c` (C pur) : canonisation,
-   `..`, préfixe de périphérique, caractères/noms douteux refusés. Testée sur
-   PC par `tests/pathpolicy_tests.c` (`scripts/test.sh`).
+1. **Symbols** — `tests/check_nand_safety.sh` rejects the binary if the final
+   ELF contains a libnx/libounce/libkaihen API that opens the NAND, save data
+   or system storages, or changes settings/content/tickets/pairing/clocks/
+   hardware. It also checks that the firewall is linked and called from
+   `userAppInit`, and that the port's sources use no raw IPC and no FS API
+   below the C library.
+2. **devoptab firewall** — `engine/src/common/platform/posix/nx/nx2_fsguard.c`
+   replaces newlib's `sdmc` entry in `userAppInit` (before any constructor).
+   Every create/write/truncate/delete/rename/mkdir/rmdir/chmod/utimes outside
+   `sdmc:/switch/uzdoom-nx2` fails (EACCES). Other FS devices are unmounted.
+   If installation fails, the program shows an error and does not start.
+3. **Path policy** — `nx2_pathpolicy.c` (pure C): canonical paths, `..`,
+   device prefixes, ambiguous names and characters refused. Tested on the PC
+   by `tests/pathpolicy_tests.c` (`scripts/test.sh`).
 
-Interdits : `fsOpenBis*`, `fsOpen_*`, `fsdevMount*` autre que la SD,
-`fsdevGetDeviceFileSystem`, `setsysSet*`, `ns*`, `ncm*`, `kaihen*`, IPC brut
-(`serviceDispatch`, `smGetService`) dans le code du portage, chemins absolus
-hors du bac à sable. `/switch` lui-même n'est jamais créé.
+Forbidden: `fsOpenBis*`, `fsOpen_*`, any `fsdevMount*` but the SD card,
+`fsdevGetDeviceFileSystem`, `setsysSet*`, `ns*`, `ncm*`, `kaihen*`, raw IPC
+(`serviceDispatch`, `smGetService`) in the port's code, absolute paths outside
+the sandbox. `/switch` itself is never created. NAND reads are not needed and
+the NAND is never opened.
 
-## Autres règles techniques
+## Other rules
 
-- Vulkan uniquement (OunceVK) ; un échec Vulkan est fatal avec message.
-- Aucun overclock (`tests/check_no_overclock.sh`).
-- Ticrate 35 Hz inchangé.
-- Ne jamais distribuer d'IWAD commerciale ni de mod ; ne pas committer
-  `*.wad`, `*.pk3`, `build/`, `dist/`.
-- Les tests sur console sont ceux de l'utilisateur : ne jamais écrire « testé
-  sur Switch 2 » sans ses logs.
+- Everything in English: code, comments, docs, commit messages. The launcher
+  and the port's screens are translated (English default, French, Portuguese):
+  every user-visible launcher string goes through `L()` and gets a line in
+  `launcher/src/core/i18n_strings.inc`; engine-side screens use `NX2_Tr()`.
+- Vulkan only (OunceVK); a Vulkan failure is fatal with a message.
+- No overclocking (`tests/check_no_overclock.sh`). Tic rate stays 35 Hz.
+- Official UZDoom branding only (`engine/branding`, CC BY-SA 4.0, attribution
+  in the package).
+- Never ship commercial IWADs or mods. Freedoom (BSD) is shipped.
+- Console tests are the user's: never write "tested on Switch 2" without
+  their logs.
 
 ## Build
 
 ```
-docker build -t ounce-devkit <checkout de ouncebrew/ounce-devkit>
-scripts/build.sh          # image + outils hôte + .nro + contrôles NAND + paquet + tests
-scripts/test.sh           # tests hôte (politique de chemins, launcher)
+docker build -t ounce-devkit <checkout of ouncebrew/ounce-devkit>
+scripts/build.sh          # image + host tools + .nro + NAND checks + package + tests
+scripts/dev-rebuild.sh    # incremental + NAND checks + package
+scripts/test.sh           # host tests (path policy, launcher, languages, package)
 ```
 
-## Carte du code propre au Switch 2
+## Switch 2 code map
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| `engine/src/common/platform/posix/nx/nx2_fsguard.c` | pare-feu SD (couche 2) |
-| `engine/src/common/platform/posix/nx/nx2_pathpolicy.c` | politique de chemins (couche 3) |
-| `engine/src/common/platform/posix/nx/i_nxsystem.cpp` | entrée, pile 16 Mo, crash.log, erreur fatale si pare-feu absent |
-| `engine/src/common/platform/posix/nx/rdoom_nx.cpp` | layout SD, logs, launcher, thread d'écriture |
-| `engine/src/common/platform/posix/sdl/sdlglvideo.cpp` | surface `VK_NN_vi_surface` 1920×1080 sur la fenêtre VI2 |
-| `engine/libraries/ZVulkan/src/volk/volk.c` | pas de loader sur Horizon : commandes liées statiquement |
-| `launcher/` | launcher (profils, bibliothèque IWAD/mods) |
-| `tests/check_nand_safety.sh` | couche 1 |
+| `engine/src/common/platform/posix/nx/nx2_fsguard.c` | SD firewall (layer 2) |
+| `engine/src/common/platform/posix/nx/nx2_pathpolicy.c` | path policy (layer 3) |
+| `engine/src/common/platform/posix/nx/nx2_lang.cpp` | language of the port's screens |
+| `engine/src/common/platform/posix/nx/i_nxsystem.cpp` | entry, 16 MB stack, crash.log, fatal error without firewall |
+| `engine/src/common/platform/posix/nx/rdoom_nx.cpp` | SD layout, logs, launcher platform, writer thread |
+| `engine/src/common/platform/posix/sdl/sdlglvideo.cpp` | `VK_NN_vi_surface` 1920×1080 on the VI2 window |
+| `engine/libraries/ZVulkan/src/volk/volk.c` | no loader on Horizon: commands linked statically, extension trampolines |
+| `launcher/` | launcher (profiles, IWAD/mod libraries, i18n) |
+| `assets/src/make_art.py` | icon and launcher art from the official UZDoom branding |
+| `tests/check_nand_safety.sh` | layer 1 |

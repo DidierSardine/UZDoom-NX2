@@ -32,7 +32,7 @@ if [ $? -ne 0 ]; then
 fi
 
 if "$ROOT/build/host-tests/launcher_tests" "$ROOT/build/host-tests/scratch" \
-	"$ROOT/engine/wadsrc_extra/static/iwadinfo.txt" "$ROOT/third_party/freedoom/freedoom-0.13.0" > "$OUT/launcher_tests.log" 2>&1; then
+	"$ROOT/engine/wadsrc_extra/static/iwadinfo.txt" "$ROOT/third_party/freedoom" > "$OUT/launcher_tests.log" 2>&1; then
 	result "launcher core unit tests" "PASS ($(tail -1 "$OUT/launcher_tests.log"))"
 else
 	result "launcher core unit tests" "FAIL ($(tail -1 "$OUT/launcher_tests.log"))"; status=1
@@ -41,7 +41,7 @@ fi
 # UI smoke: synthetic SD card with only free/synthetic content
 SD="$ROOT/build/test-results/ui-sd"
 rm -rf "$SD" && mkdir -p "$SD/iwads" "$SD/mods"
-cp "$ROOT/third_party/freedoom/freedoom-0.13.0/freedoom2.wad" "$SD/iwads/"
+cp "$ROOT/third_party/freedoom/freedoom2.wad" "$SD/iwads/"
 if "$ROOT/build/host-tests/ui_preview" "$SD" "$ROOT/assets/build" "$ROOT/engine/wadsrc_extra/static/iwadinfo.txt" "$OUT/ui" > "$OUT/ui_preview.log" 2>&1 \
 	&& [ "$(ls "$OUT/ui"/*.png | wc -l)" -ge 12 ] && grep -q "launch argv:.*-iwad" "$OUT/ui_preview.log"; then
 	result "launcher UI smoke test" "PASS ($(ls "$OUT/ui"/*.png | wc -l) screens, launch plan produced)"

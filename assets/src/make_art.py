@@ -1,33 +1,40 @@
 #!/usr/bin/env python3
-"""UZDoom NX2 - icon of the .nro and launcher artwork.
+"""UZDoom NX2 - .nro icon and launcher artwork, made from the official UZDoom branding.
 
     python3 assets/src/make_art.py [out_dir]     (default: assets/build)
 
-Writes icon_256.jpg (hbmenu icon) and the launcher's images (copied to
-switch/uzdoom-nx2/launcher/ by scripts/package.sh): splash.jpg, bg_main.jpg,
-bg_inner.jpg, logo_300/400/620.png and card_<template>.jpg.
+Sources (engine/branding, (c) 2025 The UZDoom Team, CC BY-SA 4.0, logo designed
+by Carlos "Cardboard Marty" Sanchez):
+  - branding/misc/appicon.png  -> icon_256.jpg (the official app icon, unchanged
+    apart from scaling)
+  - branding/UZDoom Banner.svg -> logo_*.png, splash.jpg (the official banner,
+    recoloured light for the launcher's dark background)
+The derived images are distributed under the same licence (CC BY-SA 4.0); the
+package carries the attribution in licenses/uzdoom-branding/.
 
-Plain lettering in Bebas Neue (SIL OFL, launcher/res/fonts) on gradients:
-no game art. Deterministic. Needs Pillow.
+Backgrounds and profile cards are plain gradients and text (Bebas Neue, SIL OFL).
+Needs Pillow and ImageMagick (`magick`, to render the SVG).
 """
 import os
+import subprocess
 import sys
+import tempfile
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BRANDING = os.path.join(ROOT, "engine", "branding")
 FONT = os.path.join(ROOT, "launcher", "res", "fonts", "BebasNeue-Regular.ttf")
-CREAM = (235, 210, 170)
-RED = (230, 60, 30)
-MUTED = (190, 170, 150)
+LIGHT = (236, 240, 242)
+MUTED = (175, 185, 190)
 
 CARDS = {
     "freedoom2": ("FREEDOOM", (40, 70, 40)),
-    "brutaldoom": ("BRUTAL", (110, 15, 10)),
+    "brutaldoom": ("BRUTAL DOOM", (110, 15, 10)),
     "brutality": ("BRUTALITY", (90, 30, 10)),
     "wadfusion": ("WADFUSION", (30, 40, 90)),
     "lexicon": ("LEXICON", (70, 30, 80)),
     "compendium": ("COMPENDIUM", (80, 60, 20)),
-    "custom": ("PERSO", (50, 20, 15)),
+    "custom": ("CUSTOM", (35, 60, 70)),
 }
 
 
@@ -49,57 +56,61 @@ def text_centered(d, cx, y, text, f, fill):
     d.text((cx - (box[2] - box[0]) // 2 - box[0], y - box[1]), text, font=f, fill=fill)
 
 
-def glow_background(w, h):
-    img = gradient(w, h, (40, 8, 6), (6, 2, 2))
+def official_banner():
+    """The official banner (mark + 'UZDoom / Ultimate ZDoom'), light on transparent, trimmed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        png = os.path.join(tmp, "banner.png")
+        subprocess.run(["magick", "-background", "none", "-density", "600",
+                        os.path.join(BRANDING, "UZDoom Banner.svg"), "-resize", "2400x", png], check=True)
+        src = Image.open(png).convert("RGBA")
+    alpha = src.split()[3]
+    light = Image.new("RGBA", src.size, LIGHT + (0,))
+    light.putalpha(alpha)
+    return light.crop(alpha.getbbox())
+
+
+def fit(img, max_w, max_h):
+    s = min(max_w / img.width, max_h / img.height)
+    return img.resize((max(1, round(img.width * s)), max(1, round(img.height * s))), Image.LANCZOS)
+
+
+def background(w, h):
+    img = gradient(w, h, (10, 28, 34), (3, 6, 8))
     glow = Image.new("RGB", (w, h), (0, 0, 0))
-    d = ImageDraw.Draw(glow)
-    d.ellipse([w * 0.45, h * 0.15, w * 1.15, h * 1.1], fill=(120, 25, 10))
+    ImageDraw.Draw(glow).ellipse([w * 0.45, h * 0.15, w * 1.15, h * 1.1], fill=(20, 110, 130))
     glow = glow.filter(ImageFilter.GaussianBlur(120))
-    return Image.blend(img, Image.eval(glow, lambda v: v), 0.45)
-
-
-def logo(width):
-    """'UZDOOM NX2' on a transparent background, 'width' pixels wide."""
-    big = Image.new("RGBA", (1240, 300), (0, 0, 0, 0))
-    d = ImageDraw.Draw(big)
-    d.text((6, 0), "UZDOOM", font=font(260), fill=CREAM + (255,))
-    box = d.textbbox((6, 0), "UZDOOM", font=font(260))
-    d.text((box[2] + 30, 0), "NX2", font=font(260), fill=RED + (255,))
-    big = big.crop(big.getbbox())
-    h = round(big.height * width / big.width)
-    return big.resize((width, h), Image.LANCZOS)
+    return Image.blend(img, glow, 0.35)
 
 
 def main(out):
     os.makedirs(out, exist_ok=True)
 
-    # hbmenu icon
-    ic = gradient(256, 256, (70, 10, 8), (20, 4, 3))
-    d = ImageDraw.Draw(ic)
-    d.rectangle([6, 6, 249, 249], outline=(200, 40, 20), width=4)
-    text_centered(d, 128, 40, "UZDOOM", font(92), CREAM)
-    text_centered(d, 128, 140, "NX2", font(88), RED)
-    text_centered(d, 128, 222, "SWITCH 2 · KAIHEN", font(22), MUTED)
-    ic.save(os.path.join(out, "icon_256.jpg"), "JPEG", quality=92)
+    # hbmenu icon: the official app icon
+    Image.open(os.path.join(BRANDING, "misc", "appicon.png")).convert("RGB") \
+        .resize((256, 256), Image.LANCZOS).save(os.path.join(out, "icon_256.jpg"), "JPEG", quality=92)
 
-    # launcher backgrounds (1280x720 framebuffer)
-    bg = glow_background(1280, 720)
+    banner = official_banner()
+    # launcher logos: home screen (fits 400x118), header of inner screens (300x58),
+    # and a large one (620 wide)
+    fit(banner, 400, 118).save(os.path.join(out, "logo_400.png"))
+    fit(banner, 300, 58).save(os.path.join(out, "logo_300.png"))
+    fit(banner, 620, 248).save(os.path.join(out, "logo_620.png"))
+
+    # backgrounds (the launcher draws on a 1280x720 framebuffer)
+    bg = background(1280, 720)
     bg.save(os.path.join(out, "bg_main.jpg"), "JPEG", quality=88)
-    gradient(1280, 720, (24, 8, 6), (8, 3, 3)).save(os.path.join(out, "bg_inner.jpg"), "JPEG", quality=86)
-    splash = bg.copy()
-    lg = logo(760)
-    splash.paste(lg, ((1280 - lg.width) // 2, 230), lg)
-    text_centered(ImageDraw.Draw(splash), 640, 410, "UZDOOM 5.0.3  ·  NINTENDO SWITCH 2  ·  VULKAN", font(34), MUTED)
-    splash.save(os.path.join(out, "splash.jpg"), "JPEG", quality=88)
-
-    for w in (300, 400, 620):
-        logo(w).save(os.path.join(out, "logo_%d.png" % w))
+    gradient(1280, 720, (8, 20, 24), (3, 6, 8)).save(os.path.join(out, "bg_inner.jpg"), "JPEG", quality=86)
+    splash = bg.copy().convert("RGBA")
+    big = fit(banner, 760, 300)
+    splash.alpha_composite(big, ((1280 - big.width) // 2, 180))
+    d = ImageDraw.Draw(splash)
+    text_centered(d, 640, 520, "UZDOOM 5.0.3  ·  NINTENDO SWITCH 2  ·  VULKAN", font(34), MUTED)
+    splash.convert("RGB").save(os.path.join(out, "splash.jpg"), "JPEG", quality=88)
 
     # profile cards
     for tid, (label, tint) in CARDS.items():
-        c = gradient(360, 220, tuple(min(255, v + 30) for v in tint), (10, 4, 4))
-        cd = ImageDraw.Draw(c)
-        text_centered(cd, 180, 60, label, font(64), CREAM)
+        c = gradient(360, 220, tuple(min(255, v + 30) for v in tint), (6, 8, 10))
+        text_centered(ImageDraw.Draw(c), 180, 60, label, font(64), LIGHT)
         c.save(os.path.join(out, "card_%s.jpg" % tid), "JPEG", quality=88)
 
 

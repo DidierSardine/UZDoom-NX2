@@ -15,6 +15,7 @@
 #include "content.h"
 #include "fsutil.h"
 #include "launch.h"
+#include "i18n.h"
 #include "library.h"
 #include "log.h"
 #include "paths.h"
@@ -374,7 +375,7 @@ static void TestCorruptAndMigration()
 	CHECK(!LoadLauncherSettings(p, ls, warn));
 	CHECK(!warn.empty() && ls.lastProfile.empty());
 	ls.lastProfile = "legacy";
-	ls.extraModDirs = { "sdmc:/switch/gzdoom/pwads" };
+	ls.extraModDirs = { "sdmc:/doom/pwads" };
 	std::string err;
 	CHECK(SaveLauncherSettings(p, ls, err));
 	LauncherSettings back;
@@ -549,6 +550,34 @@ static void TestRealFreedoom()
 	CHECK(w == 320 && h == 200);
 }
 
+static void TestLanguages()
+{
+	CHECK(GetLanguage() == Lang::En);
+	CHECK(std::string(L("Launch")) == "Launch");
+	SetLanguage(Lang::Fr);
+	CHECK(std::string(L("Launch")) == "Lancer");
+	CHECK(std::string(L("Settings")) == "Réglages");
+	CHECK(std::string(L("not a known string")) == "not a known string");
+	SetLanguage(Lang::Pt);
+	CHECK(std::string(L("Settings")) == "Configurações");
+	CHECK(LangFromCode("pt") == Lang::Pt && LangFromCode("xx") == Lang::En && LangFromCode("fr") == Lang::Fr);
+	CHECK(std::string(EngineLanguage(Lang::Pt)) == "pt_BR");
+	SetLanguage(Lang::En);
+	// the launch plan carries the language for the engine and the loading screen
+	Profile fd = MakeDefaultProfile("freedoom2");
+	ResolvedProfile r;
+	Paths p;
+	p.root = PathJoin(g_scratch, "lang");
+	LaunchPlan plan = BuildLaunchPlan(fd, r, p);
+	bool nxlang = false, engine = false;
+	for (size_t i = 0; i + 1 < plan.argv.size(); i++)
+	{
+		if (plan.argv[i] == "-nxlang" && plan.argv[i + 1] == "en") nxlang = true;
+		if (plan.argv[i] == "language" && plan.argv[i + 1] == "default") engine = true;
+	}
+	CHECK(nxlang && engine);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -573,6 +602,7 @@ int main(int argc, char **argv)
 		{ "atomic-write", TestAtomicWrite },
 		{ "validation", TestValidation },
 		{ "real-freedoom", TestRealFreedoom },
+		{ "languages", TestLanguages },
 	};
 	for (auto &t : tests)
 	{

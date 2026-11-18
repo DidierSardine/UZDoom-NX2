@@ -1,79 +1,107 @@
 # UZDoom NX2
 
-Portage non officiel d'**UZDoom 5.0.3** pour **Nintendo Switch 2**, en homebrew
-`.nro` lancé par **kaiHEN**. Rendu **Vulkan** via **OunceVK** (NVK de Mesa
-pour Switch 2), sur **libounce** (libnx pour Switch 2). Un seul fichier,
-`uzdoom-nx2.nro`, avec un launcher intégré (profils, bibliothèques d'IWAD et
-de mods, ordre de chargement) en français.
+Unofficial port of **[UZDoom](https://github.com/UZDoom/UZDoom) 5.0.3** to the
+**Nintendo Switch 2**, as a homebrew `.nro` started by **kaiHEN**. Rendering is
+**Vulkan** through **OunceVK** (Mesa's NVK for Switch 2), on **libounce**
+(libnx for Switch 2). One file, `uzdoom-nx2.nro`, with a built-in launcher
+(profiles, IWAD and mod libraries, load order) in English, French and
+Portuguese (English by default).
 
-Compatible **.wad**, **.pk3**, **.ipk3**, **.pk7**, **.zip**, **.deh/.bex**
-(tout ce que charge UZDoom).
+Plays everything UZDoom loads: **.wad**, **.pk3**, **.ipk3**, **.pk7**,
+**.zip**, **.deh/.bex**. The free **Freedoom** IWADs are included, so it is
+playable right after installation.
 
-> État : **compile et passe tous les contrôles automatiques ; pas encore testé
-> sur une vraie Switch 2.** Voir « Ce qui reste à vérifier sur console ».
+> Status: **builds and passes every automated check; not yet tested on a real
+> Switch 2.** See "What still has to be checked on the console".
 
-## Sécurité : zéro écriture NAND
+The engine is the official UZDoom 5.0.3 release (tag `5.0.3`, commit
+`7910df7102033fd7754a317f3254f24101135926` of
+[UZDoom/UZDoom](https://github.com/UZDoom/UZDoom)) plus the Switch patches in
+`patches/`. (UZDoom is the continuation of GZDoom; a few names in the code and
+in mod compatibility notes still say GZDoom.)
 
-kaiHEN n'impose aucune restriction aux homebrews : un programme peut écrire
-dans la NAND et rendre la console inutilisable. UZDoom NX2 se protège en trois
-couches indépendantes :
+## Safety: zero NAND writes
 
-1. **Rien dans le binaire ne peut ouvrir la NAND.** À chaque build,
-   `tests/check_nand_safety.sh` inspecte l'ELF final (lié statiquement, code
-   mort éliminé) et refuse le binaire s'il contient la moindre fonction qui
-   ouvre une partition BIS, une sauvegarde, un stockage système, ou qui
-   modifie réglages système, contenus installés, tickets, appairage Bluetooth,
-   album, fréquences ou matériel (≈ 80 motifs), ainsi que toute l'API kaiHEN.
-   Si le contrôle échoue, le `.nro` est supprimé.
-2. **Pare-feu d'écriture sur la carte SD** (`nx2_fsguard.c`). Installé dans
-   `userAppInit`, avant tout constructeur C++ et toute ouverture de fichier :
-   l'entrée `sdmc` de newlib est remplacée par une copie dont chaque opération
-   d'écriture (ouverture en écriture/création/troncature, suppression,
-   renommage, mkdir, rmdir, chmod, utimes, liens) est refusée (`EACCES`) hors
-   de `sdmc:/switch/uzdoom-nx2`. Cela couvre tout le code : moteur, launcher,
-   ZMusic, SDL, pilote Vulkan. Les autres périphériques de fichiers sont
-   démontés. Si le pare-feu ne s'installe pas, le programme refuse de démarrer.
-3. **Politique de chemins stricte** (`nx2_pathpolicy.c`) : canonisation,
-   `..`, préfixe de périphérique, noms ambigus (`...`, points/espaces finaux),
-   caractères interdits. 54 tests unitaires sur PC.
+kaiHEN does not restrict homebrew: a program can write to the system NAND and
+brick the console. UZDoom NX2 protects it with three independent layers
+(details: [docs/SECURITY.md](docs/SECURITY.md)):
 
-Le code de RDoom qui effaçait `sdmc:/.mesa` (hors du dossier) a été retiré ;
-OunceVK n'a pas de cache disque sur Horizon.
+1. **Nothing in the binary can open the NAND.** Every build checks the final
+   ELF (statically linked, dead code removed) and rejects it if it contains any
+   function that opens a BIS partition, save data or a system storage, or that
+   changes system settings, installed content, tickets, Bluetooth pairing,
+   album, clocks or hardware (about 80 patterns), or kaiHEN's API. If the
+   check fails, the `.nro` is deleted.
+2. **SD card write firewall** (`nx2_fsguard.c`). Installed in `userAppInit`,
+   before any C++ constructor and before any file is opened: newlib's `sdmc`
+   device entry is replaced with a copy whose write operations (open for
+   writing/create/truncate, delete, rename, mkdir, rmdir, chmod, utimes,
+   links) fail with `EACCES` outside `sdmc:/switch/uzdoom-nx2`. This covers
+   all code: engine, launcher, ZMusic, SDL, the Vulkan driver. Every other
+   file system device is unmounted. If the firewall cannot be installed, the
+   program refuses to start.
+3. **Strict path policy** (`nx2_pathpolicy.c`): canonical paths, `..`, device
+   prefixes, ambiguous names (`...`, trailing dots/spaces), refused
+   characters. 54 unit tests on the PC.
 
-## Installation
+The program does not need to read the NAND either, so the NAND is never
+opened at all.
 
-Voir [docs/INSTALL-fr.txt](docs/INSTALL-fr.txt). En bref : copier `switch/` à
-la racine de la SD, mettre les IWAD dans `switch/uzdoom-nx2/iwads/` et les
-mods dans `switch/uzdoom-nx2/mods/`, lancer depuis hbmenu (jeu lancé avec R).
+## Install
 
-## Compiler
+See [docs/INSTALL.txt](docs/INSTALL.txt). In short: copy `switch/` to the root
+of the SD card, put extra IWADs in `switch/uzdoom-nx2/iwads/` and mods in
+`switch/uzdoom-nx2/mods/`, start it from hbmenu (a game started with R held).
+
+## Build
 
 ```sh
 git clone https://github.com/ouncebrew/ounce-devkit
 docker build -t ounce-devkit ounce-devkit
+git clone https://github.com/UZDoom/UZDoom engine
+git -C engine checkout -b uzdoom-nx2 7910df7102033fd7754a317f3254f24101135926
+git -C engine am ../patches/*.patch
 scripts/build.sh
 ```
 
-Produit `dist/uzdoom-nx2.nro`, `dist/UZDoom-NX2-<ver>.zip` et
-`dist/UZDoom-NX2-<ver>-Freedoom.zip` (avec les IWAD libres Freedoom).
+Produces `dist/uzdoom-nx2.nro` and `dist/UZDoom-NX2-<version>.zip` (with
+Freedoom).
 
-## Origine et différences avec le portage Switch 1
+## What still has to be checked on the console
 
-Basé sur le moteur et le launcher de **RDoom NX** de Renan (Æon)
-(github.com/aeon1911/RDoom-NX, GPLv3), portage Vulkan d'UZDoom pour Switch 1.
-Changements pour Switch 2 :
+- the switch from the launcher to the game (Vulkan presenting on the Switch 2's
+  VI2 display layer);
+- sound (SDL2's audio renderer on Switch 2);
+- controllers (Joy-Con 2, Pro Controller).
 
-- libounce + OunceVK au lieu de libnx + SDK Mesa ; CPU Cortex-A78C ;
-- fenêtre VI2 (pas de file binder) : surface `VK_NN_vi_surface` 1920×1080,
-  60 i/s à 60 et 120 Hz, VRR autorisé ;
-- trampolines `vkGet*ProcAddr` pour les commandes d'extension non exportées
-  par OunceVK (debug utils, surface caps 2, ray tracing) ;
-- suppression des contournements Switch 1 / Ryujinx (pont TPIDR_EL0,
-  compatibilité nvhost-as, wraps binder/Mesa GL) ;
-- pare-feu SD et contrôles NAND ; tout sous `switch/uzdoom-nx2` ;
-- launcher et écran de chargement en français, nouvelle identité visuelle.
+Logs to send when something goes wrong: `switch/uzdoom-nx2/logs/` (`crash.log`,
+`engine-session.txt`, `rdoom.log`, `engine.log`, `engine-stderr.log`).
 
-## Licence
+## Origin and changes from the Switch 1 port
 
-GPLv3 (comme UZDoom). Mentions des tiers dans `THIRD_PARTY_NOTICES.md` et
-`switch/uzdoom-nx2/licenses/`.
+Based on the engine patches and launcher of **RDoom NX** by Renan (Æon)
+([aeon1911/RDoom-NX](https://github.com/aeon1911/RDoom-NX), GPLv3), a Vulkan
+port of UZDoom to the Switch 1. Changes for the Switch 2:
+
+- libounce and OunceVK instead of libnx and a Mesa SDK; Cortex-A78C CPU;
+- VI2 display window (no binder queue): `VK_NN_vi_surface` at 1920×1080,
+  60 fps at 60 and 120 Hz, VRR allowed;
+- `vkGet*ProcAddr` trampolines for the extension commands OunceVK does not
+  export (debug utils, surface capabilities 2, ray tracing);
+- Switch 1 / Ryujinx workarounds removed (TPIDR_EL0 bridge, nvhost-as
+  compatibility, binder and Mesa GL wraps);
+- SD firewall and NAND checks; everything under `switch/uzdoom-nx2`;
+- official UZDoom logo and colours; launcher and loading screen in English,
+  French and Portuguese.
+
+## Licences
+
+- Code: **GPLv3** (UZDoom's licence; RDoom NX's changes are GPLv3 too). See
+  `engine/LICENSE` and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- UZDoom logo: © 2025 The UZDoom Team, designed by Carlos "Cardboard Marty"
+  Sanchez, **CC BY-SA 4.0**. The icon and launcher logos are made from it
+  (`assets/src/make_art.py`) and are under the same licence.
+- Freedoom: BSD-style licence (`third_party/freedoom/COPYING.txt`).
+
+"Doom" is a trademark of id Software. This project is not affiliated with
+id Software, Bethesda, Nintendo or the UZDoom team.

@@ -1,4 +1,5 @@
 #include "content.h"
+#include "i18n.h"
 #include <algorithm>
 #include "fsutil.h"
 #include "log.h"
@@ -188,7 +189,7 @@ const char *ModCategoryName(ModCategory c)
 	{
 	case ModCategory::Unknown: return "Unknown";
 	case ModCategory::MapPack: return "Map pack";
-	case ModCategory::Gameplay: return "Gameplay";
+	case ModCategory::Gameplay: return L("Gameplay");
 	case ModCategory::GameplayAndMaps: return "Gameplay + maps";
 	case ModCategory::Resources: return "Resources";
 	case ModCategory::Dehacked: return "DeHackEd patch";
@@ -412,7 +413,7 @@ ContentInfo InspectFile(const std::string &path, const std::vector<IwadDef> &def
 	// that UZDoom 5 now ships, and the engine stops with "Class name ...
 	// already exists" (same result on UZDoom 5.0.3 for PC).
 	if (a.Type() == ArchiveType::Zip && a.Find("zscript/id24gore.zs") && a.Find("zscript/id24nature.zs"))
-		ci.incompatible = "généré pour GZDoom/UZDoom 4.14 (acteurs ID24 en double) ; régénérez-le avec WadFusion 1.6 ou plus récent, version UZDoom 5 (wadfusion_py.zip)";
+		ci.incompatible = L("made for GZDoom/UZDoom 4.14 (duplicate ID24 actors); generate it again with WadFusion 1.6 or newer, UZDoom 5 version (wadfusion_py.zip)");
 
 	const bool code = ci.hasZScript || ci.hasDecorate || ci.hasDehacked;
 	if (ci.mapCount > 0)
@@ -642,7 +643,7 @@ std::vector<std::string> FindCvarClashes(const std::vector<std::pair<std::string
 				list += (k ? ", " : "") + both[k];
 			if (both.size() > 3)
 				list += ", +" + std::to_string(both.size() - 3);
-			out.push_back(mods[i].first + " e " + mods[j].first + " déclarent les mêmes variables (" + list + ")");
+			out.push_back(mods[i].first + " e " + mods[j].first + L(" declare the same variables (") + list + ")");
 		}
 	return out;
 }

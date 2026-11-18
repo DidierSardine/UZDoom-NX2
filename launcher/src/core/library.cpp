@@ -1,4 +1,5 @@
 #include "library.h"
+#include "i18n.h"
 #include "fsutil.h"
 #include "log.h"
 
@@ -196,11 +197,11 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 	{
 		const LibraryItem *it = lib.FindIwad(p.iwad);
 		if (!it)
-			Add(r, IssueLevel::Error, "IWAD manquante : " + p.iwad + " (placez-la dans iwads/)");
+			Add(r, IssueLevel::Error, L("Missing IWAD: ") + p.iwad + L(" (put it in iwads/)"));
 		else if (it->info.status != FileStatus::Ok)
-			Add(r, IssueLevel::Error, "IWAD invalide : " + p.iwad + " (" + it->info.error + ")");
+			Add(r, IssueLevel::Error, L("Invalid IWAD: ") + p.iwad + " (" + it->info.error + ")");
 		else if (!it->info.isIwad)
-			Add(r, IssueLevel::Error, p.iwad + " n'est pas une IWAD (c'est un PWAD/mod)");
+			Add(r, IssueLevel::Error, p.iwad + L(" is not an IWAD (it is a PWAD/mod)"));
 		else if (!it->info.incompatible.empty())
 			Add(r, IssueLevel::Error, p.iwad + ": " + it->info.incompatible);
 		else
@@ -221,7 +222,7 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 			{
 				r.iwad = it;
 				r.filled.iwad = it->ref;
-				Add(r, IssueLevel::Info, "IWAD du modèle trouvée : " + it->ref);
+				Add(r, IssueLevel::Info, L("Template IWAD found: ") + it->ref);
 				break;
 			}
 		}
@@ -230,13 +231,13 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 			std::string list;
 			for (const auto &c : p.iwadCandidates)
 				list += (list.empty() ? "" : " ou ") + c;
-			Add(r, IssueLevel::Error, "Installation incomplète : placez " + list + " dans iwads/");
+			Add(r, IssueLevel::Error, L("Installation incomplete: put ") + list + L(" in iwads/"));
 			r.pendingInstall = true;
 		}
 	}
 	else
 	{
-		Add(r, IssueLevel::Error, "Aucune IWAD choisie pour ce profil");
+		Add(r, IssueLevel::Error, L("No IWAD chosen for this profile"));
 	}
 
 	// --- mods
@@ -254,16 +255,16 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 			{
 				if (!optional)
 				{
-					Add(r, IssueLevel::Error, "Installation incomplète : fichier " + pat + " introuvable dans mods/");
+					Add(r, IssueLevel::Error, L("Installation incomplete: file ") + pat + L(" not found in mods/"));
 					r.pendingInstall = true;
 				}
 				continue;
 			}
 			const LibraryItem *pick = matches.back();
 			if (matches.size() > 1)
-				Add(r, IssueLevel::Warning, "Plusieurs fichiers correspondent à " + pat + " ; utilisation de " + pick->ref + " (à changer dans Mods)");
+				Add(r, IssueLevel::Warning, L("Several files match ") + pat + L("; using ") + pick->ref + L(" (change it in Mods)"));
 			else
-				Add(r, IssueLevel::Info, "Mod du modèle trouvé : " + pick->ref);
+				Add(r, IssueLevel::Info, L("Template mod found: ") + pick->ref);
 			ModRef ref;
 			ref.file = pick->ref;
 			ref.optional = optional;
@@ -278,17 +279,17 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 		const LibraryItem *it = lib.FindMod(m.file);
 		if (!it)
 		{
-			Add(r, m.optional ? IssueLevel::Warning : IssueLevel::Error, "Mod manquant : " + m.file);
+			Add(r, m.optional ? IssueLevel::Warning : IssueLevel::Error, L("Missing mod: ") + m.file);
 			continue;
 		}
 		if (it->info.status != FileStatus::Ok)
 		{
-			Add(r, IssueLevel::Error, "Mod invalide : " + m.file + " (" + it->info.error + ")");
+			Add(r, IssueLevel::Error, L("Invalid mod: ") + m.file + " (" + it->info.error + ")");
 			continue;
 		}
 		if (it->info.isIwad)
 		{
-			Add(r, IssueLevel::Error, m.file + " est une IWAD ; choisissez-la comme IWAD du profil");
+			Add(r, IssueLevel::Error, m.file + L(" is an IWAD; choose it as the profile's IWAD"));
 			continue;
 		}
 		if (!it->info.incompatible.empty())
@@ -310,13 +311,13 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 					if (ToLower(PathFileName(o->ref)) == ToLower(PathFileName(dep)))
 						found = true;
 			if (!found)
-				Add(r, IssueLevel::Error, PathFileName(m->ref) + " a besoin de " + dep + " (GAMEINFO LOAD), introuvable");
+				Add(r, IssueLevel::Error, PathFileName(m->ref) + L(" needs ") + dep + L(" (GAMEINFO LOAD), not found"));
 		}
 		if (!m->info.gameinfoIwad.empty() && r.iwad &&
 		    ToLower(PathFileName(m->info.gameinfoIwad)) != ToLower(PathFileName(r.iwad->ref)))
 		{
-			Add(r, IssueLevel::Warning, PathFileName(m->ref) + " a été fait pour " + m->info.gameinfoIwad +
-			    " (IWAD du profil : " + PathFileName(r.iwad->ref) + ")");
+			Add(r, IssueLevel::Warning, PathFileName(m->ref) + L(" was made for ") + m->info.gameinfoIwad +
+			    L(" (profile IWAD: ") + PathFileName(r.iwad->ref) + ")");
 		}
 	}
 	// add-on IWADs that need a base game
@@ -324,7 +325,7 @@ ResolvedProfile ResolveProfile(const Profile &p, const Library &lib, const std::
 	{
 		const std::string &req = defs[r.iwad->info.iwadDef].required;
 		if (!req.empty())
-			Add(r, IssueLevel::Warning, r.iwad->info.title + " exige " + req + " dans le dossier iwads/");
+			Add(r, IssueLevel::Warning, r.iwad->info.title + L(" requires ") + req + L(" in the iwads/ folder"));
 	}
 
 	r.runnable = std::none_of(r.issues.begin(), r.issues.end(), [](const Issue &i) { return i.level == IssueLevel::Error; });

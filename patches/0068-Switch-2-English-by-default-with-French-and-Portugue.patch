@@ -1,0 +1,501 @@
+From 343fd5521dba87d92d9eef563758058bc304d124 Mon Sep 17 00:00:00 2001
+From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
+Date: Wed, 18 Nov 2026 18:28:21 +0100
+Subject: [PATCH 68/68] Switch 2: English by default with French and
+ Portuguese, official UZDoom colours
+
+- nx2_lang: language of the port's own screens (loading screen, fatal
+  errors, Vulkan failure), from the launcher's -nxlang switch or read only
+  from config/launcher.json; English by default.
+- Loading screen texts and tips in English, French and Portuguese.
+- Loading screen colours from the official UZDoom colour guide.
+- Comments in English; UZDoom instead of GZDoom in the port's comments.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/CMakeLists.txt                            |   1 +
+ src/common/platform/posix/nx/i_nxsystem.cpp   |  37 ++++--
+ src/common/platform/posix/nx/nx2_lang.cpp     |  59 +++++++++
+ src/common/platform/posix/nx/nx2_lang.h       |  18 +++
+ .../platform/posix/nx/nx_loadscreen.cpp       | 117 ++++++++++--------
+ src/common/platform/posix/sdl/sdlglvideo.cpp  |   8 +-
+ 6 files changed, 176 insertions(+), 64 deletions(-)
+ create mode 100644 src/common/platform/posix/nx/nx2_lang.cpp
+ create mode 100644 src/common/platform/posix/nx/nx2_lang.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index e6afe3da2e..38cb211470 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -440,6 +440,7 @@ set( PLAT_NX_SOURCES
+ 	common/platform/posix/nx/nx_glthread.cpp
+ 	common/platform/posix/nx/nx2_pathpolicy.c
+ 	common/platform/posix/nx/nx2_fsguard.c
++	common/platform/posix/nx/nx2_lang.cpp
+ 	common/platform/posix/nx/rdoom_nx.cpp )
+ set( PLAT_OSX_SOURCES
+ 	common/platform/posix/osx/iwadpicker_cocoa.mm
+diff --git a/src/common/platform/posix/nx/i_nxsystem.cpp b/src/common/platform/posix/nx/i_nxsystem.cpp
+index 102c97f571..92748e7926 100644
+--- a/src/common/platform/posix/nx/i_nxsystem.cpp
++++ b/src/common/platform/posix/nx/i_nxsystem.cpp
+@@ -37,6 +37,7 @@
+ #include <switch.h>
+ #include "nx_loadscreen.h"
+ #include "nx2_fsguard.h"
++#include "nx2_lang.h"
+ #include "rdoom_nx.h"
+ 
+ void NX_AudioAfterLoadScreen();
+@@ -104,8 +105,9 @@ void I_NXShowFatalError(const char *title, const char *message)
+ 
+ 	printf("\x1b[31;1m%s\x1b[0m\n\n", title);
+ 	printf("%s\n\n", message);
+-	printf("\x1b[33mCe message est aussi dans switch/uzdoom-nx2/logs/error.log.\x1b[0m\n\n");
+-	printf("Appuyez sur + pour quitter.\n");
++	printf("\x1b[33m%s\x1b[0m\n\n", NX2_Tr("This message was also saved to switch/uzdoom-nx2/logs/error.log.",
++		"Ce message est aussi dans switch/uzdoom-nx2/logs/error.log.", "Esta mensagem também foi salva em switch/uzdoom-nx2/logs/error.log."));
++	printf("%s\n", NX2_Tr("Press + to exit.", "Appuyez sur + pour quitter.", "Pressione + para sair."));
+ 	consoleUpdate(NULL);
+ 
+ 	while (appletMainLoop())
+@@ -124,7 +126,7 @@ void I_NXShowFatalError(const char *title, const char *message)
+ // Crash diagnostics and big main stack (Switch)
+ //
+ // The main thread that hbloader gives us only has a 1 MB stack, which is
+-// not a lot for GZDoom/UZDoom with big mods, so the engine runs in its own
++// not a lot for UZDoom with big mods, so the engine runs in its own
+ // thread with a 16 MB stack. CPU exceptions and std::terminate are logged to
+ // crash.log (next to the .nro) with addresses relative to the module base,
+ // so they can be symbolized against the unstripped .elf.
+@@ -277,7 +279,7 @@ void I_NXWorkerYield()
+ 	svcSleepThread(YieldType_ToAnyThread);
+ }
+ 
+-// GZDoom's render worker (gl_multithread): libnx starts threads on core 0
++// UZDoom's render worker (gl_multithread): libnx starts threads on core 0
+ // with the lowest priority, where it could only run while the game's own
+ // thread waits. Give it core 1 and the same priority as the game.
+ void I_NXSetupRenderThread()
+@@ -379,18 +381,27 @@ int I_NXRunWithBigStack(int (*fn)(int, char **), int argc, char **argv)
+ 	// Without the SD card firewall nothing is written and nothing starts.
+ 	if (g_fsGuardFailed || !NX2_FsGuardActive())
+ 	{
+-		char msg[700];
+-		snprintf(msg, sizeof(msg),
+-			"UZDoom NX2 n'a pas pu mettre en place sa protection d'ecriture\n"
+-			"(tout est limite a sdmc:/switch/uzdoom-nx2). Rien n'a ete ecrit.\n\n"
+-			"Verifiez que la carte SD est presente et que le dossier\n"
+-			"switch/uzdoom-nx2 existe (copiez-y uzdoom-nx2.nro).\n\n"
+-			"Detail : %s", NX2_FsGuardInstallReport());
++		char msg[900];
++		snprintf(msg, sizeof(msg), "%s\n\n%s: %s",
++			NX2_Tr("UZDoom NX2 could not set up its write protection (every write is limited\n"
++			       "to sdmc:/switch/uzdoom-nx2). Nothing was written.\n\n"
++			       "Check that the SD card is inserted and that the folder\n"
++			       "switch/uzdoom-nx2 exists (copy uzdoom-nx2.nro into it).",
++			       "UZDoom NX2 n'a pas pu mettre en place sa protection d'ecriture\n"
++			       "(tout est limite a sdmc:/switch/uzdoom-nx2). Rien n'a ete ecrit.\n\n"
++			       "Verifiez que la carte SD est presente et que le dossier\n"
++			       "switch/uzdoom-nx2 existe (copiez-y uzdoom-nx2.nro).",
++			       "O UZDoom NX2 nao conseguiu ativar a protecao de escrita (toda escrita\n"
++			       "fica limitada a sdmc:/switch/uzdoom-nx2). Nada foi escrito.\n\n"
++			       "Confira se o cartao SD esta inserido e se a pasta\n"
++			       "switch/uzdoom-nx2 existe (copie o uzdoom-nx2.nro para ela)."),
++			NX2_Tr("Details", "Detail", "Detalhes"), NX2_FsGuardInstallReport());
+ 		consoleInit(NULL);
+ 		padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+ 		PadState pad;
+ 		padInitializeDefault(&pad);
+-		printf("\x1b[31;1mUZDoom NX2 : demarrage impossible\x1b[0m\n\n%s\n\nAppuyez sur + pour quitter.\n", msg);
++		printf("\x1b[31;1m%s\x1b[0m\n\n%s\n\n%s\n", NX2_Tr("UZDoom NX2 cannot start", "UZDoom NX2 : demarrage impossible", "O UZDoom NX2 nao pode iniciar"),
++			msg, NX2_Tr("Press + to exit.", "Appuyez sur + pour quitter.", "Pressione + para sair."));
+ 		consoleUpdate(NULL);
+ 		while (appletMainLoop())
+ 		{
+@@ -423,6 +434,8 @@ int I_NXRunWithBigStack(int (*fn)(int, char **), int argc, char **argv)
+ 		// CPU boost was removed on purpose: the port runs at the console's stock clocks only
+ 		if (i > 0 && !strcmp(argv[i], "-nxboost")) continue;
+ 		if (i > 0 && !strcmp(argv[i], "-nxnoload")) { loadscreen = false; continue; }
++		// launcher language for the loading screen and the port's messages
++		if (i > 0 && !strcmp(argv[i], "-nxlang") && i + 1 < argc) { NX2_SetLangCode(argv[++i]); continue; }
+ 		argv[n++] = argv[i];
+ 	}
+ 	argc = n;
+diff --git a/src/common/platform/posix/nx/nx2_lang.cpp b/src/common/platform/posix/nx/nx2_lang.cpp
+new file mode 100644
+index 0000000000..640306b72b
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_lang.cpp
+@@ -0,0 +1,59 @@
++/*
++** nx2_lang.cpp
++** UZDoom NX2: language of the port's own screens. See nx2_lang.h.
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++
++#include "nx2_lang.h"
++#include "nx2_pathpolicy.h"
++
++#include <stdio.h>
++#include <string.h>
++
++static int g_lang = -1;
++
++void NX2_SetLangCode(const char *code)
++{
++	if (!code) return;
++	if (!strcmp(code, "fr")) g_lang = NX2_LANG_FR;
++	else if (!strcmp(code, "pt")) g_lang = NX2_LANG_PT;
++	else g_lang = NX2_LANG_EN;
++}
++
++NX2Lang NX2_Lang()
++{
++	if (g_lang < 0)
++	{
++		g_lang = NX2_LANG_EN;
++		// "language": "fr" in the launcher's settings (opened read only)
++		FILE *f = fopen(NX2_SANDBOX_ROOT "/config/launcher.json", "rb");
++		if (f)
++		{
++			char buf[4096];
++			size_t n = fread(buf, 1, sizeof(buf) - 1, f);
++			fclose(f);
++			buf[n] = 0;
++			const char *k = strstr(buf, "\"language\"");
++			const char *q = k ? strchr(k + 10, '"') : nullptr;
++			if (q)
++			{
++				char code[8] = {};
++				for (int i = 0; i < 7 && q[1 + i] && q[1 + i] != '"'; i++)
++					code[i] = q[1 + i];
++				NX2_SetLangCode(code);
++			}
++		}
++	}
++	return (NX2Lang)g_lang;
++}
++
++const char *NX2_Tr(const char *en, const char *fr, const char *pt)
++{
++	switch (NX2_Lang())
++	{
++	case NX2_LANG_FR: return fr;
++	case NX2_LANG_PT: return pt;
++	default: return en;
++	}
++}
+diff --git a/src/common/platform/posix/nx/nx2_lang.h b/src/common/platform/posix/nx/nx2_lang.h
+new file mode 100644
+index 0000000000..918a1905ba
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_lang.h
+@@ -0,0 +1,18 @@
++/*
++** nx2_lang.h
++** UZDoom NX2: language of the port's own screens (loading screen, fatal
++** errors), the same as the launcher's: English (default), French, Portuguese.
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++#pragma once
++
++enum NX2Lang { NX2_LANG_EN = 0, NX2_LANG_FR = 1, NX2_LANG_PT = 2 };
++
++// Set from the launcher's "-nxlang <en|fr|pt>" switch.
++void NX2_SetLangCode(const char *code);
++// The language; without -nxlang it is read (read only) from the launcher's
++// config/launcher.json, and English if that has none.
++NX2Lang NX2_Lang();
++// Picks the string for the current language.
++const char *NX2_Tr(const char *en, const char *fr, const char *pt);
+diff --git a/src/common/platform/posix/nx/nx_loadscreen.cpp b/src/common/platform/posix/nx/nx_loadscreen.cpp
+index 88b119d51f..1ebface7a9 100644
+--- a/src/common/platform/posix/nx/nx_loadscreen.cpp
++++ b/src/common/platform/posix/nx/nx_loadscreen.cpp
+@@ -45,6 +45,7 @@ void NX_AudioAfterLoadScreen();
+ #include "nx_font_bebas.h"
+ #include "nx_font_poppins.h"
+ #include "nx_loadscreen.h"
++#include "nx2_lang.h"
+ 
+ namespace {
+ 
+@@ -326,19 +327,23 @@ enum Milestone
+ // fallback distribution for the first start with a set of files
+ const float DefaultFrac[MS_COUNT] = { 0.f, 0.01f, 0.12f, 0.14f, 0.24f, 0.88f, 0.90f, 0.93f, 0.96f, 0.98f, 1.f };
+ 
+-const char *const StageText[MS_COUNT] =
++// { English, French, Portuguese }
++struct Tri { const char *en, *fr, *pt; };
++const char *Tr(const Tri &t) { return NX2_Tr(t.en, t.fr, t.pt); }
++
++const Tri StageText[MS_COUNT] =
+ {
+-	"Démarrage d'UZDoom NX2 (UZDoom 5.0.3)",
+-	"Ouverture des fichiers du jeu et des mods",
+-	"Démarrage de l'audio",
+-	"Chargement des textures et sprites",
+-	"Compilation des scripts du mod (ZScript / DECORATE)",
+-	"Finalisation des scripts",
+-	"Préparation des graphismes",
+-	"Chargement des menus",
+-	"Démarrage du jeu",
+-	"Presque prêt",
+-	"Démarrage de la vidéo",
++	{ "Starting UZDoom NX2 (UZDoom 5.0.3)", "Démarrage d'UZDoom NX2 (UZDoom 5.0.3)", "Iniciando o UZDoom NX2 (UZDoom 5.0.3)" },
++	{ "Opening the game and mod files", "Ouverture des fichiers du jeu et des mods", "Abrindo arquivos do jogo e mods" },
++	{ "Starting audio", "Démarrage de l'audio", "Iniciando áudio" },
++	{ "Loading textures and sprites", "Chargement des textures et sprites", "Carregando texturas e sprites" },
++	{ "Compiling the mod's scripts (ZScript / DECORATE)", "Compilation des scripts du mod (ZScript / DECORATE)", "Compilando scripts do mod (ZScript / DECORATE)" },
++	{ "Finishing scripts", "Finalisation des scripts", "Finalizando scripts" },
++	{ "Preparing graphics", "Préparation des graphismes", "Preparando gráficos" },
++	{ "Loading menus", "Chargement des menus", "Carregando menus" },
++	{ "Starting the game", "Démarrage du jeu", "Iniciando o jogo" },
++	{ "Almost ready", "Presque prêt", "Quase pronto" },
++	{ "Starting video", "Démarrage de la vidéo", "Iniciando vídeo" },
+ };
+ 
+ struct FileItem
+@@ -375,14 +380,26 @@ std::vector<Ember> gEmbers;
+ uint32_t gRand = 0x12345678;
+ float Rand01() { gRand = gRand * 1664525u + 1013904223u; return (gRand >> 8) * (1.f / 16777216.f); }
+ 
+-const char *const Tips[] =
++const Tri Tips[] =
+ {
+-	"Astuce : dans l'onglet Mods du launcher, appuyez sur A sur un mod puis utilisez la croix pour changer l'ordre de chargement.",
+-	"Astuce : le premier lancement d'un ensemble de mods est le plus lent. Ensuite, le temps restant s'affiche ici.",
+-	"Astuce : les mods de cartes se placent avant les mods de gameplay dans l'ordre de chargement.",
+-	"Astuce : la qualité \"Basse\" réduit lumières, particules et effets lointains.",
+-	"Astuce : lancez le homebrew en maintenant R sur un jeu (mode application) pour avoir toute la mémoire.",
+-	"Astuce : chaque profil du launcher garde ses mods, son ordre et ses options.",
++	{ "Tip: in the launcher's Mods tab, press A on a mod and use the D-Pad to change the load order.",
++	  "Astuce : dans l'onglet Mods du launcher, appuyez sur A sur un mod puis utilisez la croix pour changer l'ordre de chargement.",
++	  "Dica: na aba Mods do launcher, aperte A em um mod e use o direcional para mudar a ordem de carregamento." },
++	{ "Tip: the first start with a set of mods is the slowest. After that, the remaining time shows here.",
++	  "Astuce : le premier lancement d'un ensemble de mods est le plus lent. Ensuite, le temps restant s'affiche ici.",
++	  "Dica: a primeira abertura de um conjunto de mods é a mais lenta. Nas próximas, o tempo restante aparece aqui." },
++	{ "Tip: map mods go before gameplay mods in the load order.",
++	  "Astuce : les mods de cartes se placent avant les mods de gameplay dans l'ordre de chargement.",
++	  "Dica: mods de mapas vão antes dos mods de gameplay na ordem de carregamento." },
++	{ "Tip: \"Low\" quality reduces lights, particles and distant effects.",
++	  "Astuce : la qualité \"Basse\" réduit lumières, particules et effets lointains.",
++	  "Dica: a qualidade \"Baixa\" reduz luzes, partículas e efeitos distantes." },
++	{ "Tip: start the homebrew by holding R over a game (application mode) to get all the memory.",
++	  "Astuce : lancez le homebrew en maintenant R sur un jeu (mode application) pour avoir toute la mémoire.",
++	  "Dica: abra o homebrew segurando R sobre um jogo (modo aplicativo) para ter toda a memória." },
++	{ "Tip: each launcher profile keeps its own mods, order and options.",
++	  "Astuce : chaque profil du launcher garde ses mods, son ordre et ses options.",
++	  "Dica: cada perfil do launcher guarda seus próprios mods, ordem e opções." },
+ };
+ 
+ //==========================================================================
+@@ -520,13 +537,13 @@ void PrepareBackground()
+ 			for (int x = 0; x < SW; x++)
+ 			{
+ 				float fx = x / float(SW);
+-				// dark gradient with a warm glow at the bottom
++				// dark gradient with a teal glow at the bottom (UZDoom colours)
+ 				float dx = fx - 0.5f, dy = fy - 1.05f;
+ 				float glow = expf(-(dx * dx * 2.2f + dy * dy * 4.f));
+ 				float vign = 1.f - 0.55f * (dx * dx * 1.6f + (fy - 0.5f) * (fy - 0.5f) * 1.2f);
+-				int r = int((14 + 150 * glow) * vign);
+-				int g = int((6 + 30 * glow) * vign);
+-				int b = int((6 + 12 * glow) * vign);
++				int r = int((3 + 20 * glow) * vign);
++				int g = int((8 + 110 * glow) * vign);
++				int b = int((10 + 130 * glow) * vign);
+ 				gBackground[y * SW + x] = Canvas::Pack(std::min(r, 255), std::min(g, 255), std::min(b, 255));
+ 			}
+ 		}
+@@ -583,7 +600,7 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 	for (auto &e : gEmbers)
+ 	{
+ 		float a = std::min(1.f, e.life / e.max * 1.5f) * std::min(1.f, (e.max - e.life) * 2.f);
+-		c.Glow(e.x, e.y, e.size * 3.f, 0xFF7A2A, 0.55f * a);
++		c.Glow(e.x, e.y, e.size * 3.f, 0x2EEDFC, 0.55f * a);
+ 	}
+ 
+ 	// snapshot the shared state
+@@ -603,21 +620,21 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 	}
+ 
+ 	// header
+-	const uint32_t accent = 0xFF4A1C, accent2 = 0xFFB020;
++	const uint32_t accent = 0x2EEDFC, accent2 = 0x237887;	// official UZDoom colour guide
+ 	c.Text(fTitle, 76, 64, 44, "UZDOOM NX2", 0xFFFFFF);
+ 	float tw = c.TextWidth(fTitle, 76, "UZDOOM NX2");
+ 	c.Text(fTitle, 34, 64 + tw + 14, 78, "UZDOOM 5.0.3 \xE2\x80\xA2 SWITCH 2", accent);
+ 	c.RoundRect(64, 128, 86, 5, 2.5f, accent, 255, accent2);
+ 	{
+ 		// port credit
+-		const char *by = "BASÉ SUR RDOOM NX (RENAN \xC3\x86ON)";
++		const char *by = NX2_Tr("BASED ON RDOOM NX (RENAN \xC3\x86ON)", "BASÉ SUR RDOOM NX (RENAN \xC3\x86ON)", "BASEADO NO RDOOM NX (RENAN \xC3\x86ON)");
+ 		const char *tg = "kaiHEN \xE2\x80\xA2 OunceVK \xE2\x80\xA2 libounce";
+ 		float w1 = c.TextWidth(fTitle, 30, by);
+ 		float w2 = c.TextWidth(fBody, 18, tg);
+-		c.Text(fTitle, 30, 1216 - w1, 62, by, 0xF2ECE8);
++		c.Text(fTitle, 30, 1216 - w1, 62, by, 0xF3F4F4);
+ 		c.Text(fBody, 18, 1216 - w2, 98, tg, accent2);
+ 	}
+-	if (!subtitle.empty()) c.Text(fBody, 24, 64, 146, subtitle.c_str(), 0xE8E0DA, 255, 1100);
++	if (!subtitle.empty()) c.Text(fBody, 24, 64, 146, subtitle.c_str(), 0xE6EAEC, 255, 1100);
+ 
+ 	// file list
+ 	{
+@@ -632,7 +649,7 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 	for (size_t i = first; i < files.size() && shown < 8; i++, shown++)
+ 	{
+ 		auto &fi = files[i];
+-		uint32_t col = fi.state == 2 ? 0xF2ECE8 : fi.state == 1 ? 0xFFFFFF : 0x9A8F8A;
++		uint32_t col = fi.state == 2 ? 0xF3F4F4 : fi.state == 1 ? 0xFFFFFF : 0x8E9599;
+ 		// status marker
+ 		float mx = 76, my = y + 14;
+ 		if (fi.state == 2)
+@@ -649,7 +666,7 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 		}
+ 		else
+ 		{
+-			c.RoundRect(mx - 6, my - 6, 12, 12, 6, 0x5A504C, 255);
++			c.RoundRect(mx - 6, my - 6, 12, 12, 6, 0x4A5256, 255);
+ 		}
+ 		c.Text(fBody, 22, 100, y, fi.name.c_str(), col, 255, 820);
+ 		if (fi.mb > 0)
+@@ -658,48 +675,48 @@ void RenderFrame(uint32_t *dst, int stride, float dt)
+ 			if (fi.mb >= 1024) snprintf(buf, sizeof(buf), "%.1f GB", fi.mb / 1024.0);
+ 			else snprintf(buf, sizeof(buf), "%.0f MB", std::max(fi.mb, 1.0));
+ 			float w = c.TextWidth(fBody, 18, buf);
+-			c.Text(fBody, 18, 1216 - w, y + 3, buf, 0x9A8F8A);
++			c.Text(fBody, 18, 1216 - w, y + 3, buf, 0x8E9599);
+ 		}
+ 		y += 36;
+ 	}
+ 	if (first + shown < (int)files.size())
+ 	{
+ 		char buf[64];
+-		snprintf(buf, sizeof(buf), "+ %d fichier(s)", int(files.size()) - first - shown);
+-		c.Text(fBody, 18, 100, y, buf, 0x9A8F8A);
++		snprintf(buf, sizeof(buf), NX2_Tr("+ %d file(s)", "+ %d fichier(s)", "+ %d arquivo(s)"), int(files.size()) - first - shown);
++		c.Text(fBody, 18, 100, y, buf, 0x8E9599);
+ 	}
+ 
+ 	// stage + progress bar
+ 	const float bx = 64, by = 604, bw = SW - 128, bh = 16;
+-	std::string stage = StageText[std::min(milestone, MS_COUNT - 1)];
++	std::string stage = Tr(StageText[std::min(milestone, MS_COUNT - 1)]);
+ 	int dots = (elapsed / 400) % 4;
+ 	for (int i = 0; i < dots; i++) stage += '.';
+ 	c.Text(fBody, 28, bx, 514, stage.c_str(), 0xFFFFFF, 255, 900);
+-	if (!detail.empty()) c.Text(fBody, 20, bx, 556, detail.c_str(), 0xC9BDB6, 255, 900);
++	if (!detail.empty()) c.Text(fBody, 20, bx, 556, detail.c_str(), 0xC2CACE, 255, 900);
+ 
+ 	char pct[16];
+ 	snprintf(pct, sizeof(pct), "%d%%", int(progress * 100.f));
+ 	float pw = c.TextWidth(fTitle, 64, pct);
+ 	c.Text(fTitle, 64, bx + bw - pw, 520, pct, 0xFFFFFF);
+ 
+-	c.RoundRect(bx, by, bw, bh, bh / 2, 0x2A1712, 235);
++	c.RoundRect(bx, by, bw, bh, bh / 2, 0x0A1E26, 235);
+ 	float fillw = std::max(bh, bw * progress);
+-	c.RoundRect(bx, by, fillw, bh, bh / 2, 0xC21E0E, 255, accent2);
+-	c.Glow(bx + fillw - 4, by + bh / 2, 34, 0xFF8A2A, 0.45f);
++	c.RoundRect(bx, by, fillw, bh, bh / 2, 0x237887, 255, accent2);
++	c.Glow(bx + fillw - 4, by + bh / 2, 34, 0x2EEDFC, 0.45f);
+ 	// moving highlight on the bar
+ 	float sweep = fmodf(elapsed / 1400.f, 1.f);
+ 	float hx = bx + fillw * sweep;
+-	c.Glow(hx, by + bh / 2, 22, 0xFFE0A0, 0.25f);
++	c.Glow(hx, by + bh / 2, 22, 0xC8FAFF, 0.25f);
+ 
+-	std::string times = "Temps : " + FormatTime(elapsed / 1000.f);
+-	if (remaining >= 0) times += "     Restant : ~" + FormatTime(remaining);
+-	else times += "     (premier lancement avec ces fichiers : mesure du temps)";
+-	c.Text(fBody, 19, bx, 634, times.c_str(), 0xB5A9A2);
++	std::string times = NX2_Tr("Time: ", "Temps : ", "Tempo: ") + FormatTime(elapsed / 1000.f);
++	if (remaining >= 0) times += NX2_Tr("     Remaining: ~", "     Restant : ~", "     Restante: ~") + FormatTime(remaining);
++	else times += NX2_Tr("     (first start with these files: measuring the time)", "     (premier lancement avec ces fichiers : mesure du temps)", "     (primeira abertura com estes arquivos: medindo o tempo)");
++	c.Text(fBody, 19, bx, 634, times.c_str(), 0xAAB3B8);
+ 
+ 	// rotating tips
+ 	int tipn = int(sizeof(Tips) / sizeof(Tips[0]));
+-	const char *tip = Tips[(elapsed / 7000) % tipn];
+-	c.Text(fBody, 18, bx, 672, tip, 0x8C817B, 255, bw);
++	const char *tip = Tr(Tips[(elapsed / 7000) % tipn]);
++	c.Text(fBody, 18, bx, 672, tip, 0x7A7A7B, 255, bw);
+ }
+ 
+ //==========================================================================
+@@ -749,7 +766,7 @@ void ReadLoadInfo()
+ 	if (fgets(line, sizeof(line), f))
+ 	{
+ 		line[strcspn(line, "\r\n")] = 0;
+-		if (line[0]) gSubtitle = std::string("Profil : ") + line;
++		if (line[0]) gSubtitle = std::string(NX2_Tr("Profile: ", "Profil : ", "Perfil: ")) + line;
+ 	}
+ 	fclose(f);
+ }
+@@ -863,7 +880,7 @@ void NXLS_Start(int argc, char **argv)
+ 	gHistKey = hk;
+ 	LoadHistory();
+ 	ReadLoadInfo();
+-	if (gSubtitle.empty() && !gFiles.empty()) gSubtitle = "Jeu : " + gFiles[0].name;
++	if (gSubtitle.empty() && !gFiles.empty()) gSubtitle = NX2_Tr("Game: ", "Jeu : ", "Jogo: ") + gFiles[0].name;
+ 
+ 	fTitle.Init(nxls_font_bebas);
+ 	fBody.Init(nxls_font_poppins);
+@@ -952,7 +969,7 @@ void NXLS_ScriptProgress(int cur, int max)
+ 		// code generation is roughly the second half of the script stage
+ 		gSubFrac = std::max(gSubFrac, 0.5f + 0.5f * float(cur) / float(max));
+ 		char buf[96];
+-		snprintf(buf, sizeof(buf), "Génération du code : %d sur %d fonctions", cur, max);
++		snprintf(buf, sizeof(buf), NX2_Tr("Generating code: %d of %d functions", "Génération du code : %d sur %d fonctions", "Gerando código: %d de %d funções"), cur, max);
+ 		gDetail = buf;
+ 	}
+ }
+@@ -985,12 +1002,12 @@ void NXLS_OnPrint(const char *text)
+ 				break;
+ 			}
+ 		}
+-		gDetail = "Lecture de " + base;
++		gDetail = NX2_Tr("Reading ", "Lecture de ", "Lendo ") + base;
+ 		(void)matched;
+ 	}
+ 	else if (!strncmp(text, "S_Init", 6)) { SetMilestone(MS_SOUND); gDetail.clear(); }
+ 	else if (!strncmp(text, "Texman.Init", 11)) { SetMilestone(MS_TEXTURES); gDetail.clear(); }
+-	else if (!strncmp(text, "LoadActors", 10)) { SetMilestone(MS_ACTORS); gDetail = "C'est l'étape la plus longue avec les gros mods"; }
++	else if (!strncmp(text, "LoadActors", 10)) { SetMilestone(MS_ACTORS); gDetail = NX2_Tr("This is what takes longest with big mods", "C'est l'étape la plus longue avec les gros mods", "Isso é o que mais demora com mods grandes"); }
+ 	else if (!strncmp(text, "script parsing took", 19)) { SetMilestone(MS_SCRIPTSDONE); gDetail.clear(); }
+ 	else if (!strncmp(text, "R_Init", 6)) { SetMilestone(MS_RINIT); gDetail.clear(); }
+ 	else if (!strncmp(text, "M_Init", 6)) { SetMilestone(MS_MENUS); gDetail.clear(); }
+diff --git a/src/common/platform/posix/sdl/sdlglvideo.cpp b/src/common/platform/posix/sdl/sdlglvideo.cpp
+index b533920479..b81470e52c 100644
+--- a/src/common/platform/posix/sdl/sdlglvideo.cpp
++++ b/src/common/platform/posix/sdl/sdlglvideo.cpp
+@@ -30,6 +30,7 @@
+ #include "common/platform/posix/nx/nx_glthread.h"
+ #include "common/platform/posix/nx/nx_loadscreen.h"
+ #include "common/platform/posix/nx/rdoom_nx.h"
++#include "common/platform/posix/nx/nx2_lang.h"
+ #include "gamestate.h"
+ #include <switch.h>
+ #endif
+@@ -572,8 +573,11 @@ DFrameBuffer *SDLVideo::CreateFrameBuffer ()
+ 			// RDoom renders with Vulkan only: no other renderer to fall back to.
+ 			RDoom_SessionSet("renderer_active", "none");
+ 			RDoom_SessionSet("vulkan_error", error.what());
+-			I_FatalError("Vulkan n'a pas pu d\xc3\xa9marrer / Vulkan could not be started:\n%s\n\n"
+-				"Details dans switch/uzdoom-nx2/logs/engine-session.txt.", error.what());
++			I_FatalError("%s:\n%s\n\n%s",
++				NX2_Tr("Vulkan could not be started", "Vulkan n'a pas pu d\xc3\xa9marrer", "O Vulkan n\xc3\xa3o p\xc3\xb4" "de ser iniciado"),
++				error.what(),
++				NX2_Tr("Details in switch/uzdoom-nx2/logs/engine-session.txt.", "D\xc3\xa9tails dans switch/uzdoom-nx2/logs/engine-session.txt.",
++					"Detalhes em switch/uzdoom-nx2/logs/engine-session.txt."));
+ #else
+ 			if (Priv::window != nullptr)
+ 			{
+-- 
+2.47.3
+
