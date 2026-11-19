@@ -1,0 +1,55 @@
+{
+  "app_version": "UZDoom NX2 0.1.2",
+  "created": "2026-11-19T20:01:14Z",
+  "modified": "2026-11-19T20:01:14Z",
+  "format": "rdoom-profile",
+  "version": 1,
+  "id": "bench-2-brutal-nuts3",
+  "name": "BENCH 2 - Brutal Doom + NUTS3 (CPU, worst case)",
+  "description": "DOOM II + Brutal Doom v21 + NUTS3.WAD MAP01: an even bigger horde. Expect the console's CPU to give up.",
+  "template": "custom",
+  "iwad": "DOOM2.WAD",
+  "iwad_candidates": [],
+  "mod_patterns": [],
+  "mods": [
+    {
+      "enabled": true,
+      "file": "bench/nuts3.wad",
+      "optional": false
+    },
+    {
+      "enabled": true,
+      "file": "bench/brutalv21.pk3",
+      "optional": false
+    }
+  ],
+  "cvars": {
+    "vid_fps": "1"
+  },
+  "gameplay": {
+    "always_run": true,
+    "autoaim": 35.0,
+    "crosshair": 1,
+    "fast": false,
+    "no_monsters": false,
+    "respawn": false,
+    "skill": 4,
+    "warp": "MAP01"
+  },
+  "input": {
+    "deadzone": 0.15,
+    "invert_look": false,
+    "look_sensitivity": 1.0,
+    "gyro": true,
+    "gyro_sensitivity": 2.5
+  },
+  "video": {
+    "dynamic_lights": true,
+    "fps_limit": 0,
+    "internal_scale": 1.0,
+    "quality": "stock",
+    "renderer": "vulkan",
+    "texture_filter": 0,
+    "vsync": false
+  }
+}

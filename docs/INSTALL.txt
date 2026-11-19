@@ -22,6 +22,11 @@ under kaiHEN, rendered with Vulkan (OunceVK), with its own launcher.
 5. In the launcher: choose a profile (L/R), check the IWAD and mods, press +.
    The language (English, French, Portuguese) is in Settings > Language.
 
+In game
+  Gyro aiming is on (profile editor: Gyro aiming / Gyro sensitivity).
+  Left stick click: level the view and reset the gyro.
+  Console: A types and runs a command (Switch keyboard), X erases, B closes.
+
 Launcher controls
   A select   B back   L/R change profile   + launch   - edit profile
   Mod list: A enable/disable, Y move (D-Pad), X remove, + add

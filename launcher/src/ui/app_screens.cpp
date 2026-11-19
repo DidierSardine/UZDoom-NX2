@@ -96,7 +96,7 @@ namespace {
 enum EditRow
 {
 	ER_Name, ER_Desc, ER_Iwad, ER_Mods, ER_Renderer, ER_Quality, ER_Scale, ER_Fps, ER_Vsync, ER_Lights, ER_Filter,
-	ER_Sens, ER_Dead, ER_Invert, ER_Autoaim, ER_Run, ER_Cross, ER_Skill, ER_Warp, ER_Fast, ER_NoMon, ER_Respawn,
+	ER_Sens, ER_Dead, ER_Invert, ER_Gyro, ER_GyroSens, ER_Autoaim, ER_Run, ER_Cross, ER_Skill, ER_Warp, ER_Fast, ER_NoMon, ER_Respawn,
 	ER_Reset, ER_Count
 };
 
@@ -229,6 +229,8 @@ void LauncherApp::UpdateEditor(const InputFrame &in)
 	case ER_Sens: step(p->input.lookSensitivity, 0.25f, 0.25f, 3.0f); break;
 	case ER_Dead: step(p->input.deadzone, 0.05f, 0.0f, 0.4f); break;
 	case ER_Invert: toggle(p->input.invertLook); break;
+	case ER_Gyro: toggle(p->input.gyro); break;
+	case ER_GyroSens: step(p->input.gyroSensitivity, 0.25f, 0.25f, 8.0f); break;
 	case ER_Autoaim:
 		p->gameplay.autoaim = p->gameplay.autoaim > 0 ? 0.0f : 35.0f;
 		changed = true;
@@ -319,6 +321,9 @@ void LauncherApp::DrawEditor(Canvas &c)
 	snprintf(buf, sizeof(buf), "%d%%", (int)std::lround(p->input.deadzone * 100));
 	rows[ER_Dead] = { nullptr, L("Stick dead zone"), buf, kText };
 	rows[ER_Invert] = { nullptr, L("Invert vertical aim"), onoff(p->input.invertLook), kText };
+	rows[ER_Gyro] = { nullptr, L("Gyro aiming"), onoff(p->input.gyro), kText };
+	snprintf(buf, sizeof(buf), "%.2fx", p->input.gyroSensitivity);
+	rows[ER_GyroSens] = { nullptr, L("Gyro sensitivity"), buf, p->input.gyro ? kText : kDim };
 	rows[ER_Autoaim] = { L("GAME"), L("Autoaim"), onoff(p->gameplay.autoaim > 0), kText };
 	rows[ER_Run] = { nullptr, L("Always run"), onoff(p->gameplay.alwaysRun), kText };
 	rows[ER_Cross] = { nullptr, L("Crosshair"), onoff(p->gameplay.crosshair > 0), kText };
@@ -361,6 +366,7 @@ void LauncherApp::DrawEditor(Canvas &c)
 	case ER_Quality: help = L("Stock: no SSAO, bloom, lens flare or MSAA. Low also turns dynamic lights off and limits the scale to 75%. High turns bloom and light shadows on."); break;
 	case ER_Scale: help = L("Resolution the game is drawn at before it is scaled to the screen. Lower values help heavy mods."); break;
 	case ER_Fps: help = L("30 or 35 FPS give steadier frame times with heavy mods; 60 FPS for light content. The console's stock clocks are never changed."); break;
+	case ER_Gyro: case ER_GyroSens: help = L("Aim by moving the console or the controller (Joy-Con, Pro Controller). Click the left stick to level the view and reset the gyro (gyro_reset)."); break;
 	case ER_Sens: case ER_Dead: case ER_Invert: help = L("Values applied to the Joy-Con and the Pro Controller when the game starts. Button bindings made in the game's menu are saved in this profile."); break;
 	case ER_Warp: help = L("Starts directly on the given map (e.g. MAP01). Leave empty to open the game's menu."); break;
 	default: help = L("‹ › to change a value, A to open. Each profile has its own settings and saves."); break;

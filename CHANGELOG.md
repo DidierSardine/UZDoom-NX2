@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.2 (2026-11-19)
+
+From the second console test (0.1.1: DOOM II + Reelism Gold fine).
+
+- **Console:** A opens the Switch keyboard and its OK now runs the command
+  (the converted Enter key was dropped); B closes the console; X erases;
+  the D-Pad walks the history.
+- **Rumble works:** devkitPro's SDL2 never set up the vibration of the first
+  controller and sent out-of-range values. UZDoom's haptics now drive the
+  HID vibration of the active controller (handheld, Pro Controller, Joy-Con).
+- **Gyro aiming:** on by default; "Gyro aiming" and "Gyro sensitivity" in the
+  profile editor; the left stick click (`gyro_reset`) levels the view.
+  Console variables: `nx_gyro`, `nx_gyro_sensitivity`, `nx_gyro_invert_x`,
+  `nx_gyro_invert_y`, `nx_gyro_deadzone`.
+- **Freedoom: Phase 1 froze on its first 3D frame:** ZCULL (new in OunceVK
+  20261118) is off again for the scene depth, as in 0.1.0 where that game
+  ran. A GPU that stops now ends the game with an error after 20 s instead
+  of freezing it, and `hang.log` records where the game thread was.
+- OunceVK's `mkdir -p` of its cache folder no longer shows as refused writes.
+- Benchmark profiles (on the test SD card, not in the package): Brutal Doom
+  v21 + NUTS / NUTS3, Frozen Time.
+
 ## 0.1.1 (2026-11-19)
 
 Fixes from the first test on a Switch 2 (logs in `evidence/hw/2026-11-19-first-test/`,

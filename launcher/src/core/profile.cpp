@@ -153,6 +153,8 @@ std::string ProfileToJson(const Profile &p)
 		{ "look_sensitivity", p.input.lookSensitivity },
 		{ "deadzone", p.input.deadzone },
 		{ "invert_look", p.input.invertLook },
+		{ "gyro", p.input.gyro },
+		{ "gyro_sensitivity", p.input.gyroSensitivity },
 	};
 	j["gameplay"] = {
 		{ "autoaim", p.gameplay.autoaim },
@@ -279,6 +281,11 @@ bool ProfileFromJson(const std::string &text, Profile &p, std::vector<std::strin
 		r.Get(v, "look_sensitivity", p.input.lookSensitivity, "input");
 		r.Get(v, "deadzone", p.input.deadzone, "input");
 		r.Get(v, "invert_look", p.input.invertLook, "input");
+		// added in 0.1.2: profiles saved before keep the defaults silently
+		if (v.contains("gyro"))
+			r.Get(v, "gyro", p.input.gyro, "input");
+		if (v.contains("gyro_sensitivity"))
+			r.Get(v, "gyro_sensitivity", p.input.gyroSensitivity, "input");
 	}
 	if (j.contains("gameplay") && j["gameplay"].is_object())
 	{
@@ -320,6 +327,7 @@ bool ProfileFromJson(const std::string &text, Profile &p, std::vector<std::strin
 	p.video.textureFilter = Clamp(p.video.textureFilter, 0, 6);
 	p.input.lookSensitivity = Clamp(p.input.lookSensitivity, 0.1f, 4.0f);
 	p.input.deadzone = Clamp(p.input.deadzone, 0.0f, 0.6f);
+	p.input.gyroSensitivity = Clamp(p.input.gyroSensitivity, 0.25f, 8.0f);
 	p.gameplay.autoaim = Clamp(p.gameplay.autoaim, 0.0f, 35.0f);
 	p.gameplay.crosshair = Clamp(p.gameplay.crosshair, 0, 8);
 	p.gameplay.skill = Clamp(p.gameplay.skill, 0, 5);

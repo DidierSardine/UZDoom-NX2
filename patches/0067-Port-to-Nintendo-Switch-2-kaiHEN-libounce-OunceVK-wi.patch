@@ -1,7 +1,7 @@
 From f8d1d8c4e9a4dca260c5a6539dfccafdf298106e Mon Sep 17 00:00:00 2001
 From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
 Date: Wed, 18 Nov 2026 17:58:36 +0100
-Subject: [PATCH 67/70] Port to Nintendo Switch 2 (kaiHEN, libounce, OunceVK)
+Subject: [PATCH 67/71] Port to Nintendo Switch 2 (kaiHEN, libounce, OunceVK)
  with an SD write firewall
 
 - Build with libounce's Switch2.cmake toolchain and headers (Cortex-A78C),

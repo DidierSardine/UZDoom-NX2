@@ -51,6 +51,8 @@ std::vector<std::pair<std::string, std::string>> ProfileCvars(const Profile &p)
 	c.push_back({ "rd_joy_sensitivity", Num(p.input.lookSensitivity) });
 	c.push_back({ "rd_joy_deadzone", Num(p.input.deadzone) });
 	c.push_back({ "rd_joy_invert_look", p.input.invertLook ? "1" : "0" });
+	c.push_back({ "nx_gyro", p.input.gyro ? "1" : "0" });
+	c.push_back({ "nx_gyro_sensitivity", Num(p.input.gyroSensitivity) });
 
 	c.push_back({ "autoaim", Num(p.gameplay.autoaim) });
 	c.push_back({ "cl_run", p.gameplay.alwaysRun ? "1" : "0" });

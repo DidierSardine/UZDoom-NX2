@@ -1,0 +1,630 @@
+From 07538210e6f204a70a4d9ae424914608a32f9c69 Mon Sep 17 00:00:00 2001
+From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
+Date: Thu, 19 Nov 2026 21:01:54 +0100
+Subject: [PATCH 71/71] Switch 2 0.1.2: console, rumble, gyro aiming, GPU hang
+ handling
+
+- Console: A (Switch keyboard) now runs the command. The pad buttons that
+  stand for keys were converted to a key event that was then dropped. B
+  closes the console.
+- Rumble (nx2_motion.cpp): devkitPro's SDL2 never set up the vibration of
+  its first joystick and sent out-of-range values; I_Rumble now drives the
+  HID vibration devices of the active controller directly.
+- Gyro aiming (nx2_motion.cpp): six-axis sensors of the active controller,
+  player-space yaw (follows gravity), nx_gyro, nx_gyro_sensitivity,
+  nx_gyro_invert_x/_y, nx_gyro_deadzone; gyro_reset (left stick click when
+  free) levels the view.
+- No ZCULL on the scene depth again (rd_vk_zcull 0, as in 0.1.0): the first
+  3D frame of Freedoom: Phase 1 hung with OunceVK 20261118's new ZCULL.
+- GPU waits are bounded (20 s): a hung GPU stops the game with an error
+  instead of freezing it; the hang watchdog now follows Vulkan frames and
+  the engine's own thread, and writes hang.log.
+- SD firewall: mkdir of an existing folder above the sandbox ("/switch")
+  answers EEXIST without writing (OunceVK's mkdir -p of its cache).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |   2 +-
+ src/CMakeLists.txt                            |   1 +
+ src/common/console/c_console.cpp              |  12 +-
+ src/common/platform/posix/nx/i_nxsystem.cpp   |   5 +
+ src/common/platform/posix/nx/nx2_fsguard.c    |  24 ++
+ src/common/platform/posix/nx/nx2_motion.cpp   | 279 ++++++++++++++++++
+ src/common/platform/posix/nx/nx_glthread.cpp  |   7 +
+ src/common/platform/posix/sdl/i_input.cpp     |   6 +
+ src/common/platform/posix/sdl/i_joystick.cpp  |   8 +
+ .../vulkan/system/vk_commandbuffer.cpp        |  38 ++-
+ .../vulkan/system/vk_renderdevice.cpp         |   5 +
+ .../vulkan/textures/vk_renderbuffers.cpp      |   2 +-
+ src/d_main.cpp                                |   6 +
+ 13 files changed, 389 insertions(+), 6 deletions(-)
+ create mode 100644 src/common/platform/posix/nx/nx2_motion.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2e57344caf..1ce8453ce9 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -72,7 +72,7 @@ if( NINTENDO_SWITCH )
+ 	# our gcc complains about the use of alloca, stricmp, etc without including the appropriate headers
+ 	# unless we just do this
+ 	set( CMAKE_CXX_EXTENSIONS ON )
+-	set( RDOOM_VERSION "0.1.1" )	# UZDoom NX2 version
++	set( RDOOM_VERSION "0.1.2" )	# UZDoom NX2 version
+ 	set( SWITCH_APP_VERSION "${RDOOM_VERSION}" )
+ 	# RDoom launcher sources (outside this tree so the engine stays a patch series)
+ 	set( RDOOM_LAUNCHER_DIR "${CMAKE_SOURCE_DIR}/../launcher" CACHE PATH "RDoom launcher source directory" )
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d879474a47..b998c52621 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -441,6 +441,7 @@ set( PLAT_NX_SOURCES
+ 	common/platform/posix/nx/nx2_pathpolicy.c
+ 	common/platform/posix/nx/nx2_fsguard.c
+ 	common/platform/posix/nx/nx2_lang.cpp
++	common/platform/posix/nx/nx2_motion.cpp
+ 	common/platform/posix/nx/rdoom_nx.cpp )
+ set( PLAT_OSX_SOURCES
+ 	common/platform/posix/osx/iwadpicker_cocoa.mm
+diff --git a/src/common/console/c_console.cpp b/src/common/console/c_console.cpp
+index de6daf3854..e8d8285a25 100644
+--- a/src/common/console/c_console.cpp
++++ b/src/common/console/c_console.cpp
+@@ -1225,6 +1225,10 @@ static bool C_HandleJoystick (event_t *ev, FCommandBuffer &buffer)
+ 				ev->data1 = '\r';
+ 				return true;
+ 			}
++			case KEY_PAD_B:
++				// close the console (there is no keyboard key for it on the Switch)
++				C_ToggleConsole();
++				return true;
+ #endif
+ 			case KEY_PAD_X:
+ 				// feed fake backspace
+@@ -1260,9 +1264,15 @@ bool C_Responder (event_t *ev)
+ 		return false;
+ 	}
+ 
+-	// allow joystick controls
++	// allow joystick controls; the buttons that stand for a key (A = the
++	// on-screen keyboard and Enter, X = backspace, D-Pad = history) turn the
++	// event into that key, which must then be handled as one: before, the
++	// converted event was dropped, so a command typed with the Switch keyboard
++	// was written to the line but never run
+ 	if (C_HandleJoystick(ev, CmdLine))
+ 	{
++		if (ev->type == EV_GUI_Event)
++			return C_HandleKey(ev, CmdLine);
+ 		return true;
+ 	}
+ 
+diff --git a/src/common/platform/posix/nx/i_nxsystem.cpp b/src/common/platform/posix/nx/i_nxsystem.cpp
+index 92748e7926..555d6b0343 100644
+--- a/src/common/platform/posix/nx/i_nxsystem.cpp
++++ b/src/common/platform/posix/nx/i_nxsystem.cpp
+@@ -297,14 +297,19 @@ static void *NXMainThread(void *p)
+ 	// on core 0 can never hold it up when it wakes from waiting on the GPU
+ 	svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2C);
+ 	std::set_terminate(I_NXTerminate);
++	extern void NX_SetHangWatchThread();
++	NX_SetHangWatchThread();
+ 	RDoom_Crumb("engine: main thread running");
+ 	a->ret = a->fn(a->argc, a->argv);
+ 	RDoom_Crumb("engine: main returned");
+ 	return nullptr;
+ }
+ 
++void NX2_RumbleStop();
++
+ static void NXAtExit()
+ {
++	NX2_RumbleStop();	// never leave a controller vibrating
+ 	NXLS_Stop();
+ 	NXLS_SetBoost(false);
+ 	RDoom_NXAtExit();
+diff --git a/src/common/platform/posix/nx/nx2_fsguard.c b/src/common/platform/posix/nx/nx2_fsguard.c
+index 885fed0cf6..842ec9a1ee 100644
+--- a/src/common/platform/posix/nx/nx2_fsguard.c
++++ b/src/common/platform/posix/nx/nx2_fsguard.c
+@@ -33,7 +33,9 @@
+ #include <fcntl.h>
+ #include <stdio.h>
+ #include <string.h>
++#include <strings.h>
+ #include <sys/iosupport.h>
++#include <sys/stat.h>
+ #include <switch.h>
+ 
+ static devoptab_t g_guarded;              // our copy of the sdmc entry
+@@ -146,8 +148,30 @@ static int G_rename(struct _reent *r, const char *oldName, const char *newName)
+ 	return g_original->rename_r(r, oldName, newName);
+ }
+ 
++// "/" and "/switch", the folders that contain the sandbox: creating them
++// would write nothing new, and they exist (the .nro is in one of them).
++static int NX2_IsSandboxAncestor(const char *canon)
++{
++	return !strcmp(canon, "/") || !strcasecmp(canon, "/switch");
++}
++
+ static int G_mkdir(struct _reent *r, const char *path, int mode)
+ {
++	char cwd[NX2_PATH_MAX + 2];
++	char canon[NX2_PATH_MAX + 1];
++	NX2_GetCwd(cwd, sizeof(cwd));
++	if (NX2_PathCheck(cwd[0] ? cwd : NULL, path, NX2_OP_MAKE_DIR, canon) == NX2_PATH_OUTSIDE &&
++		NX2_IsSandboxAncestor(canon))
++	{
++		// "mkdir -p" of a path inside the sandbox (OunceVK's shader cache
++		// does this): answer as the file system would, without writing
++		struct stat st;
++		if (g_original->stat_r && g_original->stat_r(r, canon, &st) == 0)
++		{
++			r->_errno = EEXIST;
++			return -1;
++		}
++	}
+ 	if (NX2_Allow(r, "mkdir", path, NX2_OP_MAKE_DIR))
+ 		return -1;
+ 	return g_original->mkdir_r(r, path, mode);
+diff --git a/src/common/platform/posix/nx/nx2_motion.cpp b/src/common/platform/posix/nx/nx2_motion.cpp
+new file mode 100644
+index 0000000000..5b9e3603f2
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_motion.cpp
+@@ -0,0 +1,279 @@
++/*
++** nx2_motion.cpp
++** UZDoom NX2: controller rumble and gyro aiming on the Switch 2.
++**
++** Rumble: devkitPro's SDL2 never initializes the vibration device of its
++** first joystick (handheld / player 1), passes a style *set* where HID wants
++** one style, and sends an amplitude of 320 where HID expects 0..1, so
++** UZDoom's haptics did nothing. I_Rumble comes here instead and drives the
++** HID vibration devices of the active controller directly.
++**
++** Gyro: SDL2's Switch port has no motion sensors. The six-axis sensors of the
++** active controller are read every frame and turned into view rotation in
++** "player space": the yaw axis follows gravity, so turning works the same
++** with the console held upright, flat, with a single Joy-Con or a Pro
++** Controller. Pitch follows the controller's own left-right axis.
++**
++**   nx_gyro 1                 gyro aiming on (default) / 0 off
++**   nx_gyro_sensitivity 2.5   1 = the view turns as much as the controller
++**   nx_gyro_invert_x/_y       flip one axis
++**   gyro_reset                level the view and restart the gravity estimate
++**                             (bound to the left stick click when it is free)
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++
++#ifdef __SWITCH2__
++
++#include <switch.h>
++#include <math.h>
++#include <string.h>
++
++#include "c_cvars.h"
++#include "c_dispatch.h"
++#include "c_console.h"
++#include "c_bind.h"
++#include "d_event.h"
++#include "doomstat.h"
++#include "menu.h"
++#include "keydef.h"
++#include "i_interface.h"
++
++void G_AddViewAngle(int yaw, bool mouse);
++void G_AddViewPitch(int look, bool mouse);
++
++CVAR(Bool, nx_gyro, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Float, nx_gyro_sensitivity, 2.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, nx_gyro_invert_x, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, nx_gyro_invert_y, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++// angular speed (turns per second) below which the gyro is ignored: hides the
++// sensor noise of a controller held still (0.004 = 1.4 degrees per second)
++CVAR(Float, nx_gyro_deadzone, 0.004f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++
++namespace
++{
++	enum Slot { SlotHandheld, SlotFullKey, SlotJoyDual, SlotJoyLeft, SlotJoyRight, SlotCount };
++
++	struct Device
++	{
++		HidNpadIdType id;
++		HidNpadStyleTag style;
++		int count;					// vibration devices / six-axis handles
++		int sensor;					// which six-axis handle aims (the right Joy-Con of a pair)
++		HidVibrationDeviceHandle vib[2];
++		HidSixAxisSensorHandle six[2];
++		bool vibOk, sixOk;
++	};
++
++	Device devices[SlotCount] = {
++		{ HidNpadIdType_Handheld, HidNpadStyleTag_NpadHandheld, 2, 0 },
++		{ HidNpadIdType_No1, HidNpadStyleTag_NpadFullKey, 2, 0 },
++		{ HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual, 2, 1 },
++		{ HidNpadIdType_No1, HidNpadStyleTag_NpadJoyLeft, 1, 0 },
++		{ HidNpadIdType_No1, HidNpadStyleTag_NpadJoyRight, 1, 0 },
++	};
++
++	bool initialized = false;
++	uint64_t lastTick = 0;
++	uint64_t lastSample = 0;
++	int lastSlot = -1;
++	float gravity[3] = { 0, 0, 0 };
++	bool gravityValid = false;
++	double yawRest = 0, pitchRest = 0;	// sub-unit remainders
++	float rumbleLow = 0, rumbleHigh = 0;
++
++	void Init()
++	{
++		if (initialized)
++			return;
++		initialized = true;
++		for (auto &d : devices)
++		{
++			// six-axis handles: one for handheld, Pro Controller and single
++			// Joy-Con, two (left, right) for a Joy-Con pair
++			const int sixCount = d.style == HidNpadStyleTag_NpadJoyDual ? 2 : 1;
++			d.sixOk = R_SUCCEEDED(hidGetSixAxisSensorHandles(d.six, sixCount, d.id, d.style));
++			if (d.sixOk)
++				for (int i = 0; i < sixCount; i++)
++					hidStartSixAxisSensor(d.six[i]);
++			d.vibOk = R_SUCCEEDED(hidInitializeVibrationDevices(d.vib, d.count, d.id, d.style));
++		}
++	}
++
++	// the controller the player is using: the handheld Joy-Con when attached,
++	// else player 1's controller in the style it is connected as
++	int ActiveSlot()
++	{
++		if (hidGetNpadStyleSet(HidNpadIdType_Handheld) & HidNpadStyleTag_NpadHandheld)
++			return SlotHandheld;
++		const u32 st = hidGetNpadStyleSet(HidNpadIdType_No1);
++		if (st & HidNpadStyleTag_NpadFullKey) return SlotFullKey;
++		if (st & HidNpadStyleTag_NpadJoyDual) return SlotJoyDual;
++		if (st & HidNpadStyleTag_NpadJoyRight) return SlotJoyRight;
++		if (st & HidNpadStyleTag_NpadJoyLeft) return SlotJoyLeft;
++		return -1;
++	}
++
++	void SendRumble(int slot, float low, float high)
++	{
++		if (slot < 0 || !devices[slot].vibOk)
++			return;
++		Device &d = devices[slot];
++		HidVibrationValue v[2];
++		for (int i = 0; i < d.count; i++)
++		{
++			v[i].amp_low = low;
++			v[i].freq_low = 160.0f;
++			v[i].amp_high = high;
++			v[i].freq_high = 320.0f;
++		}
++		hidSendVibrationValues(d.vib, v, d.count);
++	}
++
++	bool GyroWanted()
++	{
++		return nx_gyro && gamestate == GS_LEVEL && menuactive == MENU_Off && ConsoleState == c_up && !paused;
++	}
++}
++
++// UZDoom's haptics (I_Rumble): 0..1 for the low and high frequency motors.
++void NX2_Rumble(float high, float low)
++{
++	Init();
++	if (high < 0) high = 0; else if (high > 1) high = 1;
++	if (low < 0) low = 0; else if (low > 1) low = 1;
++	rumbleLow = low;
++	rumbleHigh = high;
++	SendRumble(ActiveSlot(), low, high);
++}
++
++void NX2_RumbleStop()
++{
++	if (!initialized)
++		return;
++	for (int s = 0; s < SlotCount; s++)
++		SendRumble(s, 0, 0);
++	rumbleLow = rumbleHigh = 0;
++}
++
++static void ResetGyro()
++{
++	gravityValid = false;
++	yawRest = pitchRest = 0;
++}
++
++CCMD(gyro_reset)
++{
++	ResetGyro();
++	C_DoCommand("centerview");
++}
++
++// Once per frame, on the game thread (I_StartFrame).
++void NX2_MotionFrame()
++{
++	Init();
++	const uint64_t now = armGetSystemTick();
++	const double dt = lastTick ? armTicksToNs(now - lastTick) / 1e9 : 0.0;
++	lastTick = now;
++
++	const int slot = ActiveSlot();
++	if (slot != lastSlot)
++	{
++		// a new controller: carry the rumble over, start the gravity estimate again
++		if (lastSlot >= 0 && (rumbleLow > 0 || rumbleHigh > 0))
++			SendRumble(lastSlot, 0, 0);
++		if (slot >= 0 && (rumbleLow > 0 || rumbleHigh > 0))
++			SendRumble(slot, rumbleLow, rumbleHigh);
++		lastSlot = slot;
++		lastSample = 0;
++		ResetGyro();
++	}
++	if (slot < 0 || !devices[slot].sixOk || dt <= 0 || dt > 0.25)
++		return;
++
++	Device &d = devices[slot];
++	HidSixAxisSensorState states[17];
++	const size_t n = hidGetSixAxisSensorStates(d.six[d.sensor], states, 17);
++	if (n == 0)
++		return;
++	// the newest samples first: average the angular velocity of the ones not
++	// seen yet, follow gravity with the newest acceleration
++	float w[3] = { 0, 0, 0 };
++	int fresh = 0;
++	for (size_t i = 0; i < n; i++)
++	{
++		if (states[i].sampling_number <= lastSample)
++			break;
++		w[0] += states[i].angular_velocity.x;
++		w[1] += states[i].angular_velocity.y;
++		w[2] += states[i].angular_velocity.z;
++		fresh++;
++	}
++	lastSample = states[0].sampling_number;
++	if (fresh == 0)
++		return;
++	for (float &c : w)
++		c /= fresh;
++
++	const float a[3] = { states[0].acceleration.x, states[0].acceleration.y, states[0].acceleration.z };
++	if (!gravityValid)
++	{
++		memcpy(gravity, a, sizeof(gravity));
++		gravityValid = true;
++	}
++	else
++	{
++		const float k = (float)fmin(1.0, dt * 2.0);	// ~0.5 s low-pass
++		for (int i = 0; i < 3; i++)
++			gravity[i] += (a[i] - gravity[i]) * k;
++	}
++	if (!GyroWanted())
++	{
++		yawRest = pitchRest = 0;
++		return;
++	}
++
++	// HID reports acceleration toward the ground (0, 0, -1 lying flat):
++	// "up" is the opposite. Turning left is a positive rotation about it.
++	const float glen = sqrtf(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2]);
++	if (glen < 0.3f)
++		return;	// free fall or a bad sample
++	const float up[3] = { -gravity[0] / glen, -gravity[1] / glen, -gravity[2] / glen };
++	float yawLeft = w[0] * up[0] + w[1] * up[1] + w[2] * up[2];	// turns per second
++	float pitchUp = w[0];											// about the controller's left-right axis
++
++	const float dz = nx_gyro_deadzone;
++	auto soften = [dz](float v) {
++		// below the dead zone the movement fades in instead of jumping
++		const float m = fabsf(v);
++		if (m >= 2 * dz) return v;
++		if (m <= dz * 0.5f) return 0.0f;
++		return v * (m - dz * 0.5f) / (1.5f * dz);
++	};
++	yawLeft = soften(yawLeft);
++	pitchUp = soften(pitchUp);
++	if (nx_gyro_invert_x) yawLeft = -yawLeft;
++	if (nx_gyro_invert_y) pitchUp = -pitchUp;
++
++	// G_AddViewAngle/Pitch take 1/65536 of a turn; a positive yaw turns right
++	const double scale = 65536.0 * nx_gyro_sensitivity * dt;
++	yawRest += -yawLeft * scale;
++	pitchRest += pitchUp * scale;
++	const int yaw = (int)yawRest, pitch = (int)pitchRest;
++	yawRest -= yaw;
++	pitchRest -= pitch;
++	if (yaw)
++		G_AddViewAngle(yaw, true);
++	if (pitch)
++		G_AddViewPitch(pitch, true);
++}
++
++// After the configuration is loaded: the left stick click resets the gyro
++// unless the player bound it to something else.
++void NX2_MotionDefaultBindings()
++{
++	if (Bindings.GetBinding(KEY_PAD_LTHUMB).IsEmpty())
++		Bindings.SetBind(KEY_PAD_LTHUMB, "gyro_reset");
++}
++
++#endif // __SWITCH2__
+diff --git a/src/common/platform/posix/nx/nx_glthread.cpp b/src/common/platform/posix/nx/nx_glthread.cpp
+index 176be1f907..6ef4ac200d 100644
+--- a/src/common/platform/posix/nx/nx_glthread.cpp
++++ b/src/common/platform/posix/nx/nx_glthread.cpp
+@@ -374,6 +374,13 @@ static void *WatchdogThread(void *)
+ 
+ static void StartWatchdog();
+ 
++// The thread the watchdog reports on: the engine's own thread (it runs on a
++// big-stack thread of its own, not on the thread that starts the watchdog).
++void NX_SetHangWatchThread()
++{
++	gMainHandle = threadGetCurHandle();
++}
++
+ void NX_StartHangWatch()
+ {
+ 	if (!gMainHandle) gMainHandle = threadGetCurHandle();
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index 93b9a85fe7..80f4f61606 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -707,7 +707,13 @@ void I_StartTic ()
+ }
+ 
+ void I_ProcessJoysticks ();
++#ifdef __SWITCH2__
++void NX2_MotionFrame();	// nx2_motion.cpp: gyro aiming
++#endif
+ void I_StartFrame ()
+ {
+ 	I_ProcessJoysticks();
++#ifdef __SWITCH2__
++	NX2_MotionFrame();
++#endif
+ }
+diff --git a/src/common/platform/posix/sdl/i_joystick.cpp b/src/common/platform/posix/sdl/i_joystick.cpp
+index 74036a8d44..afd6c445aa 100644
+--- a/src/common/platform/posix/sdl/i_joystick.cpp
++++ b/src/common/platform/posix/sdl/i_joystick.cpp
+@@ -766,9 +766,17 @@ void I_GetAxes(float axes[NUM_AXIS_CODES])
+ 	}
+ }
+ 
++#ifdef __SWITCH2__
++void NX2_Rumble(float high, float low);	// nx2_motion.cpp: SDL's Switch rumble does not work
++#endif
++
+ void I_Rumble(double high_freq, double low_freq, double left_trig, double right_trig)
+ {
+ 	if (!use_joystick) return;
++#ifdef __SWITCH2__
++	NX2_Rumble((float)high_freq, (float)low_freq);
++	return;
++#endif
+ 
+ 	JoystickManager->Rumble(high_freq, low_freq, left_trig, right_trig);
+ }
+diff --git a/src/common/rendering/vulkan/system/vk_commandbuffer.cpp b/src/common/rendering/vulkan/system/vk_commandbuffer.cpp
+index 6474e0fef5..2477cbc8f0 100644
+--- a/src/common/rendering/vulkan/system/vk_commandbuffer.cpp
++++ b/src/common/rendering/vulkan/system/vk_commandbuffer.cpp
+@@ -200,6 +200,38 @@ void VkCommandBufferManager::ReadGpuMarks()
+ #endif
+ }
+ 
++
++// Switch 2: a GPU that stops (a hang, not a reported loss) used to freeze the
++// game for good on an infinite fence wait, with the music still playing.
++// Waits are bounded: after 20 s the device counts as lost and the game stops
++// with an error (and the logs say where), instead of hanging silently.
++static void NX2_WaitFences(VkDevice device, uint32_t count, const VkFence *fences, const char *where)
++{
++#ifdef __SWITCH2__
++	if (VulkanDeviceWasLost || count == 0)
++		return;
++	for (int i = 0; i < 4; i++)
++	{
++		const VkResult r = vkWaitForFences(device, count, fences, VK_TRUE, 5'000'000'000ull);
++		if (r == VK_SUCCESS)
++			return;
++		if (r != VK_TIMEOUT)
++		{
++			VulkanDeviceWasLost = true;
++			if (VulkanDeviceLostCallback)
++				VulkanDeviceLostCallback(where);
++			VulkanError("The GPU stopped (device lost while waiting for a frame)");
++		}
++	}
++	VulkanDeviceWasLost = true;
++	if (VulkanDeviceLostCallback)
++		VulkanDeviceLostCallback(where);
++	VulkanError("The GPU did not finish a frame in 20 seconds (GPU hang)");
++#else
++	vkWaitForFences(device, count, fences, VK_TRUE, std::numeric_limits<uint64_t>::max());
++#endif
++}
++
+ void VkCommandBufferManager::WaitForBank(int bank)
+ {
+ 	PendingFrame &p = mPending[bank];
+@@ -207,7 +239,7 @@ void VkCommandBufferManager::WaitForBank(int bank)
+ 		return;
+ 	NXPERF_SCOPE(vkpending_ms, nullptr);
+ 	VkFence *fences = mSubmitWaitFences + bank * maxConcurrentSubmitCount;
+-	vkWaitForFences(fb->device->device, p.fences, fences, VK_TRUE, std::numeric_limits<uint64_t>::max());
++	NX2_WaitFences(fb->device->device, p.fences, fences, "fence wait (frame bank)");
+ 	vkResetFences(fb->device->device, p.fences, fences);
+ 	p.transferDelete.reset();
+ 	p.drawDelete.reset();
+@@ -242,7 +274,7 @@ void VkCommandBufferManager::FlushCommands(VulkanCommandBuffer** commands, size_
+ 	if (mNextSubmit >= maxConcurrentSubmitCount)
+ 	{
+ 		NXPERF_SCOPE(gpuwait_ms, nullptr);
+-		vkWaitForFences(fb->device->device, 1, &mSubmitFence[currentIndex]->fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
++		NX2_WaitFences(fb->device->device, 1, &mSubmitFence[currentIndex]->fence, "fence wait (submit slot)");
+ 		vkResetFences(fb->device->device, 1, &mSubmitFence[currentIndex]->fence);
+ 	}
+ 
+@@ -382,7 +414,7 @@ void VkCommandBufferManager::WaitForCommands(bool finish, bool uploadOnly)
+ 	{
+ 		NXPERF_SCOPE(gpuwait_ms, nullptr);
+ 		VkFence *fences = mSubmitWaitFences + mBank * maxConcurrentSubmitCount;
+-		vkWaitForFences(fb->device->device, numWaitFences, fences, VK_TRUE, std::numeric_limits<uint64_t>::max());
++		NX2_WaitFences(fb->device->device, numWaitFences, fences, "fence wait (end of frame)");
+ 		vkResetFences(fb->device->device, numWaitFences, fences);
+ 	}
+ 
+diff --git a/src/common/rendering/vulkan/system/vk_renderdevice.cpp b/src/common/rendering/vulkan/system/vk_renderdevice.cpp
+index 2c6a478303..39a13e9fab 100644
+--- a/src/common/rendering/vulkan/system/vk_renderdevice.cpp
++++ b/src/common/rendering/vulkan/system/vk_renderdevice.cpp
+@@ -840,6 +840,11 @@ void VulkanRenderDevice::BeginFrame()
+ {
+ #ifdef __SWITCH__
+ 	RDoom_VkFrameNumber++;
++	{
++		// the hang watchdog (nx_glthread.cpp) writes hang.log when this stops
++		extern volatile uint32_t nx_heartbeat;
++		nx_heartbeat++;
++	}
+ 	EvictStaleTextures();
+ #endif
+ 	// perf.log "begin" breakdown: wait / cache save / buffers / sprites
+diff --git a/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp b/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp
+index fbcc5c30c5..381fa55113 100644
+--- a/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp
++++ b/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp
+@@ -35,7 +35,7 @@ CVAR(Bool, rd_vk_depth32, false, 0)
+ // usage is within {transfer, sampled, depth attachment, input attachment}, so
+ // declaring them TRANSIENT_ATTACHMENT (attachment-only) turns it off. Nothing
+ // samples these depth buffers except SSAO, which is disabled while this is off.
+-CVAR(Bool, rd_vk_zcull, NX_SW1_DEFAULT(false, true), 0)
++CVAR(Bool, rd_vk_zcull, false, 0)
+ // Scene colour format: 0 = RGBA16F (UZDoom default), 1 = RGB10A2, 2 = RGBA8.
+ // The 32-bit formats halve the bytes every scene pixel, blend, copy and
+ // post-processing pass moves through the Tegra X1's shared memory bus; HDR
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 9e000733b0..2457e69318 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -3823,6 +3823,12 @@ static int D_InitGame(const FIWADInfo* iwad_info, std::vector<FileSys::ResourceN
+ 	}
+ 
+ 	GameConfig->DoKeySetup(gameinfo.ConfigName.GetChars());
++#ifdef __SWITCH2__
++	{
++		extern void NX2_MotionDefaultBindings();
++		NX2_MotionDefaultBindings();	// left stick click = gyro_reset, when free
++	}
++#endif
+ 
+ 	// Now that wads are loaded, define mod-specific cvars.
+ 	ParseCVarInfo();
+-- 
+2.47.3
+
