@@ -31,3 +31,4 @@ __pycache__/
 /assets/build/
 # Freedoom (BSD) is part of the project
 !/third_party/freedoom/*.wad
+/docker/pkg/

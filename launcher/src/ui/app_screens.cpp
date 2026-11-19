@@ -676,14 +676,22 @@ void LauncherApp::UpdateModPicker(const InputFrame &in)
 	Profile *p = store_.FindMutable(target);
 	if (!p)
 		return;
-	for (auto &m : p->mods)
-		if (ToLower(m.file) == ToLower(it.ref))
-		{
-			ToastMsg(L("Already in profile \"") + p->name + "\"");
-			return;
-		}
+	// the template's mods become the profile's list, so they can be removed too
 	if (p->mods.empty() && !p->modPatterns.empty())
 		p->mods = ResolveProfile(*p, lib_, defs_).filled.mods;
+	// A toggles: a mod already in the profile is removed from it (the file
+	// stays on the SD card)
+	for (size_t i = 0; i < p->mods.size(); i++)
+		if (ToLower(p->mods[i].file) == ToLower(it.ref))
+		{
+			p->mods.erase(p->mods.begin() + i);
+			std::string err;
+			if (store_.Save(*p, err))
+				ToastMsg(L("Removed from \"") + p->name + "\"");
+			else
+				ToastMsg(err, true);
+			return;
+		}
 	ModRef ref;
 	ref.file = it.ref;
 	p->mods.push_back(ref);
@@ -700,7 +708,7 @@ void LauncherApp::DrawModPicker(Canvas &c)
 	const auto &items = lib_.Mods();
 	const std::string target = editId_.empty() ? currentId_ : editId_;
 	const Profile *p = store_.Find(target);
-	DrawHeader(c, L("Mod library"), std::to_string(items.size()) + L(" file(s)  •  A adds to profile \"") + (p ? p->name : "") + "\"");
+	DrawHeader(c, L("Mod library"), std::to_string(items.size()) + L(" file(s)  •  A adds to or removes from profile \"") + (p ? p->name : "") + "\"");
 	const int x = 48, y0 = 136, w = 700, rh = 62, visible = 8;
 	KeepVisible(st, (int)items.size(), visible);
 	DrawPanel(c, x - 12, y0 - 12, w + 24, visible * rh + 24);
@@ -777,7 +785,7 @@ void LauncherApp::DrawModPicker(Canvas &c)
 			u += (u.empty() ? "" : ", ") + s;
 		kv(L("Profiles"), u.empty() ? L("none") : u, kMuted);
 	}
-	DrawHints(c, { { "A", L("Add to profile") }, { "Y", L("Rescan") }, { "B", L("Back") } });
+	DrawHints(c, { { "A", L("Add / remove") }, { "Y", L("Rescan") }, { "B", L("Back") } });
 }
 
 // ---------------------------------------------------------------------------
@@ -937,6 +945,9 @@ void LauncherApp::UpdateDiagnostics(const InputFrame &in)
 				return;
 			// only the program's own cache: nothing outside the sandbox is touched
 			int n = RemoveFile(PathJoin(paths_.Cache(), "uzdoom/vulkanpipelinecache")) ? 1 : 0;
+			const int m = RemoveTree(PathJoin(paths_.Cache(), "ouncevk"));	// OunceVK's shader cache
+			if (m > 0)
+				n += m;
 			RLOG_I("diag", "shader caches cleared by the user: %d files", n);
 			ToastMsg(L("Shader cache cleared (") + std::to_string(n) + L(" file(s))"));
 		});

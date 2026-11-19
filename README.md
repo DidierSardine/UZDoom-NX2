@@ -11,8 +11,9 @@ Plays everything UZDoom loads: **.wad**, **.pk3**, **.ipk3**, **.pk7**,
 **.zip**, **.deh/.bex**. The free **Freedoom** IWADs are included, so it is
 playable right after installation.
 
-> Status: **builds and passes every automated check; not yet tested on a real
-> Switch 2.** See "What still has to be checked on the console".
+> Status: **0.1.1, early.** The first console test (0.1.0) found a black screen
+> with big mods and a GPU loss in levels; 0.1.1 fixes their causes (see
+> [CHANGELOG.md](CHANGELOG.md)) but has not been re-tested yet.
 
 The engine is the official UZDoom 5.0.3 release (tag `5.0.3`, commit
 `7910df7102033fd7754a317f3254f24101135926` of

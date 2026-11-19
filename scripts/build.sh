@@ -25,6 +25,14 @@ docker image inspect ounce-devkit >/dev/null 2>&1 || die "build the ounce-devkit
 step "Freedoom 0.13.0 (shipped in the package)"
 (cd "$ROOT/third_party/freedoom" && sha256sum -c --quiet SHA256SUMS.txt) || die "third_party/freedoom: checksum mismatch"
 
+OVK=ouncevk-20261118-1-any.pkg.tar.zst
+if [ ! -f "$ROOT/docker/pkg/$OVK" ]; then
+	step "OunceVK 20261118 package (GitHub release)"
+	mkdir -p "$ROOT/docker/pkg"
+	curl -fsSL -o "$ROOT/docker/pkg/$OVK" "https://github.com/ouncebrew/ouncevk/releases/download/20261118/$OVK" || die "cannot download $OVK"
+fi
+echo "fdb15b647d06f7306c7e2573bd73f13b05346fd17c16ae690489850bfe1dba29  $ROOT/docker/pkg/$OVK" | sha256sum -c --quiet - || die "$OVK: checksum mismatch"
+
 step "Toolchain image ($IMAGE)"
 docker build -q -f "$ROOT/docker/Dockerfile" -t "$IMAGE" "$ROOT/docker" > "$LOG_DIR/docker-image.log" 2>&1 \
 	|| { cat "$LOG_DIR/docker-image.log"; die "docker build failed"; }

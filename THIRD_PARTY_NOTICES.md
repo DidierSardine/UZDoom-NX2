@@ -19,7 +19,7 @@ its owners; no Doom logo, character art or commercial game data is included.
 | UZDoom | tag 5.0.3, `7910df7102033fd7754a317f3254f24101135926` | GPL-3.0-or-later (engine), with code under BSD/MIT/zlib and others listed in `engine/docs/licenses/` | `engine/` |
 | GZDoom / ZDoom lineage | via UZDoom | GPL-3.0-or-later and the historic Doom source licence terms in UZDoom | `engine/` |
 | Earlier Switch port of GZDoom (fgsfds) — platform code, crash handler, loading screen base | via the user's UZDoom 5.0.3 Switch port | BSD-3-Clause style (file headers) / GPL-3.0 | `engine/src/common/platform/posix/nx/` |
-| OunceVK (Mesa NVK for Switch 2: Vulkan, Zink/EGL linked for SDL2, not used for rendering) | ouncevk 20261117.1 from the [ounce] pacman repository (github.com/ouncebrew/ouncevk) | MIT (most of Mesa; see `MESA-MIT.txt`), other components per Mesa's licences | linked static |
+| OunceVK (Mesa NVK for Switch 2: Vulkan, Zink/EGL linked for SDL2, not used for rendering) | ouncevk 20261118 (GitHub release package, `git-2d6a8aec8b`; github.com/ouncebrew/ouncevk) | MIT (most of Mesa; see `MESA-MIT.txt`), other components per Mesa's licences | linked static |
 | Rust standard library (inside OunceVK, used by NAK) | as built by OunceVK | MIT OR Apache-2.0 | linked static |
 | libounce (libnx for Switch 2, includes mimalloc) | 20261117.1 (github.com/ouncebrew/libounce) | ISC (`LIBNX-ISC.txt`); mimalloc MIT | linked static |
 | devkitA64 runtime (newlib, libgcc, libstdc++) | GCC 15.2.0 toolchain | newlib: BSD-style licences; libgcc/libstdc++: GPL-3.0 with the GCC Runtime Library Exception | linked static |

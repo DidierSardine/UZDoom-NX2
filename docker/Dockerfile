@@ -20,6 +20,15 @@ ENV DEVKITPRO=/opt/devkitpro \
     DEVKITA64=/opt/devkitpro/devkitA64 \
     PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:/opt/devkitpro/portlibs/switch2/bin:/opt/devkitpro/portlibs/switch/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# OunceVK 20261118 (GPU memory, NAK and ZCULL fixes), from its GitHub release:
+# the [ounce] pacman repository still serves 20261117.1. Checked against the
+# release's SHA-256.
+COPY pkg/ouncevk-20261118-1-any.pkg.tar.zst /tmp/
+RUN echo "fdb15b647d06f7306c7e2573bd73f13b05346fd17c16ae690489850bfe1dba29  /tmp/ouncevk-20261118-1-any.pkg.tar.zst" | sha256sum -c - \
+ && dkp-pacman -U --noconfirm /tmp/ouncevk-20261118-1-any.pkg.tar.zst \
+ && rm /tmp/ouncevk-20261118-1-any.pkg.tar.zst \
+ && dkp-pacman -Q ouncevk | grep -q "20261118"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git cmake ninja-build g++ python3 \
       libsdl2-dev libopenal-dev libvpx-dev libbz2-dev zlib1g-dev \

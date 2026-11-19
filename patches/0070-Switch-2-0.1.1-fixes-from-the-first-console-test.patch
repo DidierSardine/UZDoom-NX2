@@ -1,0 +1,434 @@
+From bde93d10b4c2771324eb0e61b8c06d1f3a4df255 Mon Sep 17 00:00:00 2001
+From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
+Date: Thu, 19 Nov 2026 20:19:33 +0100
+Subject: [PATCH 70/70] Switch 2 0.1.1: fixes from the first console test
+
+- Vulkan failed to start with big mods ("out of device memory"): RDoom's
+  object pool (a newlib workaround) took 128 KB-aligned slabs from
+  libounce's small heap-page pool, which mimalloc needs for OunceVK's first
+  32 MB segment. The pool and the malloc wraps are off on the Switch 2.
+- Fatal errors were invisible: Vulkan still held the display layer.
+  Switch_I_FatalError releases it before showing the error console.
+- GPU lost in a level: RDoom's Switch 1 (Tegra X1) renderer workarounds
+  default to UZDoom's own behaviour on the Switch 2 (NX_SW1_DEFAULT), and
+  configs saved by 0.1.0 are migrated once (rd_defaults_rev 4).
+- OunceVK's shader cache in switch/uzdoom-nx2/cache/ouncevk
+  (MESA_SHADER_CACHE_DIR), cleared with the other shader caches.
+- perf.log reports the heap's real use.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |  2 +-
+ src/CMakeLists.txt                            |  3 +-
+ src/common/console/c_cvars.h                  |  9 ++++++
+ src/common/engine/nx_governor.cpp             |  2 +-
+ src/common/engine/nx_perf.cpp                 |  9 ++++++
+ src/common/objects/nx_objpool.cpp             | 10 +++++--
+ src/common/platform/posix/nx/rdoom_nx.cpp     | 10 +++++--
+ src/common/platform/posix/sdl/i_system.cpp    | 14 +++++++++
+ .../vulkan/renderer/vk_postprocess.cpp        |  2 +-
+ .../vulkan/renderer/vk_renderstate.cpp        |  6 ++--
+ .../vulkan/system/vk_commandbuffer.cpp        |  4 +--
+ .../vulkan/system/vk_renderdevice.cpp         |  6 ++--
+ .../rendering/vulkan/textures/vk_asynctex.cpp |  2 +-
+ .../rendering/vulkan/textures/vk_nxupload.cpp |  2 +-
+ .../vulkan/textures/vk_renderbuffers.cpp      |  6 ++--
+ src/d_main.cpp                                | 29 +++++++++++++++++++
+ src/rendering/hwrenderer/hw_nxprefetch.cpp    |  4 +--
+ src/rendering/hwrenderer/scene/hw_sprites.cpp |  4 +--
+ 18 files changed, 98 insertions(+), 26 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 28ae25e676..2e57344caf 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -72,7 +72,7 @@ if( NINTENDO_SWITCH )
+ 	# our gcc complains about the use of alloca, stricmp, etc without including the appropriate headers
+ 	# unless we just do this
+ 	set( CMAKE_CXX_EXTENSIONS ON )
+-	set( RDOOM_VERSION "0.1.0" )	# UZDoom NX2 version
++	set( RDOOM_VERSION "0.1.1" )	# UZDoom NX2 version
+ 	set( SWITCH_APP_VERSION "${RDOOM_VERSION}" )
+ 	# RDoom launcher sources (outside this tree so the engine stays a patch series)
+ 	set( RDOOM_LAUNCHER_DIR "${CMAKE_SOURCE_DIR}/../launcher" CACHE PATH "RDoom launcher source directory" )
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 38cb211470..d879474a47 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1420,8 +1420,7 @@ endif()
+ if( NINTENDO_SWITCH )
+ 	# everything is static on Switch, so let the linker resolve the circular deps
+ 	target_link_libraries( zdoom -Wl,--start-group rdoom_launcher_ui rdoom_launcher_core ${PROJECT_LIBRARIES} lzma ${ZMUSIC_LIBRARIES} absl::base absl::flat_hash_map absl::strings absl::hash nx -Wl,--end-group )
+-	# nx_objpool.cpp: small allocations and script objects from a pool
+-	target_link_options( zdoom PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free" "-Wl,--wrap=realloc" "-Wl,--wrap=calloc" "-Wl,--wrap=malloc_usable_size" )
++	# (no malloc wrap: on Switch 2 malloc is libounce's mimalloc; see nx_objpool.cpp)
+ 	# nx_glthread.cpp: SDL audio threads off the game's core
+ 	target_link_options( zdoom PRIVATE "-Wl,--wrap=pthread_create" "-pthread" "-Wl,--gc-sections" )
+ 	option( RDOOM_VK_TRACE "Log recorded Vulkan commands per submit (diagnostic)" OFF )
+diff --git a/src/common/console/c_cvars.h b/src/common/console/c_cvars.h
+index b9ffe3beb3..003a6970dd 100644
+--- a/src/common/console/c_cvars.h
++++ b/src/common/console/c_cvars.h
+@@ -779,4 +779,13 @@ void C_ForgetCVars (void);
+ #define CUSTOM_CVAR(type,name,def,flags) CUSTOM_CVARD(type,name,def,flags,nullptr)
+ #define CVAR(type,name,def,flags) CVARD(type,name,def,flags, nullptr)
+ 
++// RDoom NX's Switch 1 (Tegra X1) performance workarounds: on the Switch 2 they
++// default to UZDoom's own behaviour (the GPU is much faster, and keeping the
++// stock code paths keeps the renderer close to the tested upstream one).
++#ifdef __SWITCH2__
++#define NX_SW1_DEFAULT(sw1, sw2) sw2
++#else
++#define NX_SW1_DEFAULT(sw1, sw2) sw1
++#endif
++
+ #endif //__C_CVARS_H__
+diff --git a/src/common/engine/nx_governor.cpp b/src/common/engine/nx_governor.cpp
+index 5dc9ea6cf4..1fe5ad8a8c 100644
+--- a/src/common/engine/nx_governor.cpp
++++ b/src/common/engine/nx_governor.cpp
+@@ -31,7 +31,7 @@
+ // (dozens of translucent layers); only purely visual detail is trimmed and
+ // only while frames are late.
+ #ifdef __SWITCH__
+-CVAR(Int, nx_stabilizer, 60, CVAR_GLOBALCONFIG)
++CVAR(Int, nx_stabilizer, NX_SW1_DEFAULT(60, 0), CVAR_GLOBALCONFIG)
+ #else
+ CVAR(Int, nx_stabilizer, 0, CVAR_GLOBALCONFIG)
+ #endif
+diff --git a/src/common/engine/nx_perf.cpp b/src/common/engine/nx_perf.cpp
+index b103c9ab34..03b7352390 100644
+--- a/src/common/engine/nx_perf.cpp
++++ b/src/common/engine/nx_perf.cpp
+@@ -77,9 +77,18 @@ void NXPerf_MemoryText(char *buf, size_t len)
+ 	u64 used = 0, total = 0;
+ 	svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+ 	svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
++#ifdef __SWITCH2__
++	// libounce commits the whole heap to mimalloc at start-up, so the
++	// process always looks full: report the heap's own use (GPU memory of
++	// OunceVK comes from the same heap)
++	const u64 heapTotal = heapGetTotalSize(), heapFree = heapGetFreeSize();
++	snprintf(buf, len, "memory: heap in use %.0f of %.0f MB (process %.0f of %.0f MB)",
++		(heapTotal - heapFree) / 1048576.0, heapTotal / 1048576.0, used / 1048576.0, total / 1048576.0);
++#else
+ 	struct mallinfo mi = mallinfo();
+ 	snprintf(buf, len, "memory: process %.0f of %.0f MB, malloc in use %.0f MB of %.0f MB obtained",
+ 		used / 1048576.0, total / 1048576.0, mi.uordblks / 1048576.0, mi.arena / 1048576.0);
++#endif
+ }
+ #else
+ void NXPerf_MemoryText(char *buf, size_t len)
+diff --git a/src/common/objects/nx_objpool.cpp b/src/common/objects/nx_objpool.cpp
+index b043e48a19..41d4ba3079 100644
+--- a/src/common/objects/nx_objpool.cpp
++++ b/src/common/objects/nx_objpool.cpp
+@@ -28,7 +28,13 @@
+ #include <string.h>
+ #include <mutex>
+ 
+-#ifdef __SWITCH__
++// Switch 2 (libounce): malloc is mimalloc, fast and per thread, so the pool
++// below (a workaround for newlib's slow malloc on the Switch 1) is not used.
++// It also hurt there: its 128 KB-aligned slabs come from libounce's small
++// heap-page pool (alignment above 64 KB), the same pool mimalloc needs for
++// large blocks, so a big mod could leave the Vulkan driver unable to
++// allocate its first 32 MB segment ("out of device memory").
++#if defined(__SWITCH__) && !defined(__SWITCH2__)
+ 
+ #include <switch.h>
+ #include "nx_perf.h"
+@@ -275,7 +281,7 @@ extern "C" size_t __wrap_malloc_usable_size(void *p)
+ 	return bsize ? bsize : __real_malloc_usable_size(p);
+ }
+ 
+-#else
++#else	// not the Switch 1
+ 
+ void *NXObj_Alloc(size_t size) { return M_Malloc(size); }
+ void NXObj_Free(void *mem) { M_Free(mem); }
+diff --git a/src/common/platform/posix/nx/rdoom_nx.cpp b/src/common/platform/posix/nx/rdoom_nx.cpp
+index 8ae84c07b1..ea8608fcbb 100644
+--- a/src/common/platform/posix/nx/rdoom_nx.cpp
++++ b/src/common/platform/posix/nx/rdoom_nx.cpp
+@@ -6,6 +6,7 @@
+ ** Copyright 2026 RDoom contributors. GPLv3 (same as UZDoom).
+ */
+ 
++#include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/stat.h>
+@@ -220,6 +221,9 @@ static void RotateLogs()
+ 
+ void RDoom_NXEarlyInit()
+ {
++	// OunceVK's on-disk shader cache defaults to sdmc:/config/ouncevk, outside
++	// the program's folder (the SD firewall refuses it): keep it in cache/.
++	setenv("MESA_SHADER_CACHE_DIR", RDOOM_SD_ROOT "/cache/ouncevk", 1);
+ 	MakeDirs(RDOOM_SD_ROOT "/logs");
+ 	RotateLogs();
+ 	unlink(RDOOM_SD_ROOT "/logs/boot.log");
+@@ -283,8 +287,10 @@ int RDoom_ClearShaderCaches()
+ 	// UZDoom's Vulkan pipeline cache (written on exit)
+ 	if (RemoveFile(RDOOM_SD_ROOT "/cache/uzdoom/vulkanpipelinecache"))
+ 		n++;
+-	// (OunceVK keeps no shader cache on the SD card: Mesa's disk cache is off
+-	// on Horizon, and nothing outside the sandbox is ever touched.)
++	// OunceVK's shader cache (MESA_SHADER_CACHE_DIR, set at start-up)
++	const int m = RemoveTree(RDOOM_SD_ROOT "/cache/ouncevk");
++	if (m > 0)
++		n += m;
+ 	return n;
+ }
+ 
+diff --git a/src/common/platform/posix/sdl/i_system.cpp b/src/common/platform/posix/sdl/i_system.cpp
+index 114af2b4c8..c22785d22f 100644
+--- a/src/common/platform/posix/sdl/i_system.cpp
++++ b/src/common/platform/posix/sdl/i_system.cpp
+@@ -153,8 +153,22 @@ void Unix_I_FatalError(const char* errortext)
+ #include "version.h"
+ void I_NXShowFatalError(const char *title, const char *message);
+ 
++void I_ShutdownGraphics();
++
+ void Switch_I_FatalError(const char* message)
+ {
++	// Switch 2: one producer presents to the display layer at a time. The
++	// Vulkan swapchain (or the surface of a device that failed to start)
++	// still holds it, so the error console would stay invisible (a black or
++	// frozen screen). Release Vulkan first; a lost device can still be
++	// destroyed.
++	try
++	{
++		I_ShutdownGraphics();
++	}
++	catch (...)
++	{
++	}
+ 	SDL_Quit();
+ 	FILE *f = fopen("error.log", "w");
+ 	if (f)
+diff --git a/src/common/rendering/vulkan/renderer/vk_postprocess.cpp b/src/common/rendering/vulkan/renderer/vk_postprocess.cpp
+index a2f0c170e7..e51703e793 100644
+--- a/src/common/rendering/vulkan/renderer/vk_postprocess.cpp
++++ b/src/common/rendering/vulkan/renderer/vk_postprocess.cpp
+@@ -109,7 +109,7 @@ void VkPostprocess::PostProcessScene(int fixedcm, float flash, const std::functi
+ }
+ 
+ #ifdef __SWITCH__
+-CVAR(Bool, rd_vk_sceneswap, true, 0)
++CVAR(Bool, rd_vk_sceneswap, NX_SW1_DEFAULT(true, false), 0)
+ #endif
+ 
+ void VkPostprocess::BlitSceneToPostprocess()
+diff --git a/src/common/rendering/vulkan/renderer/vk_renderstate.cpp b/src/common/rendering/vulkan/renderer/vk_renderstate.cpp
+index f16af6b542..cc2dbf537a 100644
+--- a/src/common/rendering/vulkan/renderer/vk_renderstate.cpp
++++ b/src/common/rendering/vulkan/renderer/vk_renderstate.cpp
+@@ -71,16 +71,16 @@ CVAR(Int, rd_vk_drawlog, 0, 0)
+ // rd_vk_zstate 1 = no depth/stencil writes, 2 = no depth/stencil tests at all
+ // Hardware results 2026-10-11: triangle fans and depth bias both hang the
+ // GM20B under NVK (fifo idle timeout); lists and plain states do not.
+-CVAR(Bool, rd_vk_nofans, true, 0)
++CVAR(Bool, rd_vk_nofans, NX_SW1_DEFAULT(true, false), 0)
+ CVAR(Int, rd_vk_zstate, 0, 0)
+ // rd_vk_depthbias 0: depth bias emulated by compressing the viewport depth
+ // range for biased draws ([0,1-eps] closer, [eps,1] farther); 1: native bias
+-CVAR(Bool, rd_vk_depthbias, false, 0)
++CVAR(Bool, rd_vk_depthbias, NX_SW1_DEFAULT(false, true), 0)
+ CVAR(Float, rd_vk_depthbias_eps, 1.0f / 8192.0f, 0)
+ // 2D images with the default material use the "simple2d" effect shader:
+ // main.fp's 2D path without the 3D material/light code (Project Brutality's
+ // visor on the console: ~1.9 ms of GPU per screen of 2D with the full shader)
+-CVAR(Bool, rd_vk_simple2d, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_vk_simple2d, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ int rd_vk_drawlog_burst = 0;
+ int rd_vk_drawlog_started = 0;
+ extern int nx_levelframes;
+diff --git a/src/common/rendering/vulkan/system/vk_commandbuffer.cpp b/src/common/rendering/vulkan/system/vk_commandbuffer.cpp
+index 2943df1862..6474e0fef5 100644
+--- a/src/common/rendering/vulkan/system/vk_commandbuffer.cpp
++++ b/src/common/rendering/vulkan/system/vk_commandbuffer.cpp
+@@ -115,8 +115,8 @@ void VkCommandBufferManager::BeginFrame()
+ }
+ 
+ #if defined(__SWITCH__)
+-CVAR(Bool, rd_vk_frameoverlap, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+-CVAR(Bool, rd_vk_gputime, true, 0)
++CVAR(Bool, rd_vk_frameoverlap, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_vk_gputime, NX_SW1_DEFAULT(true, false), 0)
+ #endif
+ 
+ void VkCommandBufferManager::MarkGpu(GpuMark mark)
+diff --git a/src/common/rendering/vulkan/system/vk_renderdevice.cpp b/src/common/rendering/vulkan/system/vk_renderdevice.cpp
+index 15b3998158..2c6a478303 100644
+--- a/src/common/rendering/vulkan/system/vk_renderdevice.cpp
++++ b/src/common/rendering/vulkan/system/vk_renderdevice.cpp
+@@ -316,12 +316,12 @@ void VulkanRenderDevice::RenderTextureView(FCanvasTexture* tex, std::function<vo
+ }
+ 
+ #ifdef __SWITCH__
+-CVAR(Bool, rd_vk_earlysubmit, true, 0)
++CVAR(Bool, rd_vk_earlysubmit, NX_SW1_DEFAULT(true, false), 0)
+ // Dynamic resolution of the 3D view: the scene is drawn into a smaller part of
+ // the render target when the GPU needs more than rd_dynres_target ms per frame
+ // (Brutal Doom explosions: dozens of large translucent smoke sprites), then
+ // stretched back before the weapon and HUD, which stay at full resolution.
+-CVAR(Bool, rd_dynres, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_dynres, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ CVAR(Float, rd_dynres_target, 12.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ CVAR(Float, rd_dynres_min, 0.6f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ CVAR(Float, rd_dynres_force, 0.0f, 0)	// tests: fixed 3D scale (0 = automatic)
+@@ -725,7 +725,7 @@ uint64_t RDoom_VkFrameNumber = 0;
+ // show up). Project Brutality + WadFusion on the console: every monster,
+ // gore and weapon frame seen stayed on the GPU until the heap ran out after
+ // ~11 minutes ("Could not realloc 24263712 bytes").
+-CVAR(Int, rd_vk_texevict_mb, 2300, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Int, rd_vk_texevict_mb, NX_SW1_DEFAULT(2300, 0), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ // pictures losing their GPU copy per frame. Destroying an image costs about
+ // 0.23 ms on the console (845 ms for 3682 in one frame); 1.1.2/1.1.3 freed
+ // them all at once and froze the game for 0.1-1.3 s every 30 s.
+diff --git a/src/common/rendering/vulkan/textures/vk_asynctex.cpp b/src/common/rendering/vulkan/textures/vk_asynctex.cpp
+index 0ae9792f5b..1279ec012c 100644
+--- a/src/common/rendering/vulkan/textures/vk_asynctex.cpp
++++ b/src/common/rendering/vulkan/textures/vk_asynctex.cpp
+@@ -36,7 +36,7 @@
+ #include "nx_perf.h"
+ #include "textures.h"
+ 
+-CVAR(Bool, rd_vk_async_textures, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_vk_async_textures, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ // game thread time per frame for copying finished pictures to the GPU
+ CVAR(Float, rd_vk_async_upload_ms, 3.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ 
+diff --git a/src/common/rendering/vulkan/textures/vk_nxupload.cpp b/src/common/rendering/vulkan/textures/vk_nxupload.cpp
+index c55cd00f03..52a97c2f44 100644
+--- a/src/common/rendering/vulkan/textures/vk_nxupload.cpp
++++ b/src/common/rendering/vulkan/textures/vk_nxupload.cpp
+@@ -27,7 +27,7 @@
+ #include "c_cvars.h"
+ #include "common/platform/posix/nx/rdoom_nx.h"
+ 
+-CVAR(Bool, rd_vk_blitupload, true, 0)
++CVAR(Bool, rd_vk_blitupload, NX_SW1_DEFAULT(true, false), 0)
+ 
+ static bool FormatSupported(VulkanRenderDevice *fb, VkFormat format)
+ {
+diff --git a/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp b/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp
+index c493fbbffa..fbcc5c30c5 100644
+--- a/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp
++++ b/src/common/rendering/vulkan/textures/vk_renderbuffers.cpp
+@@ -35,7 +35,7 @@ CVAR(Bool, rd_vk_depth32, false, 0)
+ // usage is within {transfer, sampled, depth attachment, input attachment}, so
+ // declaring them TRANSIENT_ATTACHMENT (attachment-only) turns it off. Nothing
+ // samples these depth buffers except SSAO, which is disabled while this is off.
+-CVAR(Bool, rd_vk_zcull, false, 0)
++CVAR(Bool, rd_vk_zcull, NX_SW1_DEFAULT(false, true), 0)
+ // Scene colour format: 0 = RGBA16F (UZDoom default), 1 = RGB10A2, 2 = RGBA8.
+ // The 32-bit formats halve the bytes every scene pixel, blend, copy and
+ // post-processing pass moves through the Tegra X1's shared memory bus; HDR
+@@ -44,12 +44,12 @@ CVAR(Bool, rd_vk_zcull, false, 0)
+ // Default RGBA8: with bloom and tonemapping off (the Switch profiles) the image
+ // on screen is the same, and translucent layers (Brutal Doom's smoke) blend at
+ // full rate instead of the half rate and double traffic of RGBA16F.
+-CVAR(Int, rd_vk_scenefmt, 2, CVAR_GLOBALCONFIG)
++CVAR(Int, rd_vk_scenefmt, NX_SW1_DEFAULT(2, 0), CVAR_GLOBALCONFIG)
+ // Translucent effect sprites (smoke, fire) in a half-resolution layer blended
+ // over the scene (HWDrawInfo::NXRenderHalfEffects). Its depth is drawn from
+ // the scene depth, which then cannot be a transient attachment and gets ZCULL
+ // like rd_vk_zcull 1 (fine on hardware since the light-header fix: 0% either way).
+-CVAR(Bool, rd_vk_halfeffects, true, CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_vk_halfeffects, NX_SW1_DEFAULT(true, false), CVAR_GLOBALCONFIG)
+ VkImageUsageFlags RDoom_DepthUsage(VkImageUsageFlags usage)
+ {
+ 	if (rd_vk_zcull)
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 733e114c40..9e000733b0 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -2423,6 +2423,17 @@ EXTERN_CVAR(Int, nx_workers)
+ EXTERN_CVAR(Bool, gl_precache)
+ EXTERN_CVAR(Float, rd_vk_async_upload_ms)
+ EXTERN_CVAR(Int, nx_perfthreshold)
++#ifdef __SWITCH2__
++EXTERN_CVAR(Bool, rd_vk_frameoverlap)
++EXTERN_CVAR(Bool, rd_dynres)
++EXTERN_CVAR(Int, rd_vk_texevict_mb)
++EXTERN_CVAR(Bool, rd_vk_async_textures)
++EXTERN_CVAR(Bool, rd_async_sprites)
++EXTERN_CVAR(Bool, rd_sprite_prefetch)
++EXTERN_CVAR(Bool, rd_vk_simple2d)
++EXTERN_CVAR(Float, rd_fx_nearcull)
++EXTERN_CVAR(Float, rd_fx_nearfade)
++#endif
+ #endif
+ 
+ EXTERN_CVAR(Bool, r_ticstability)
+@@ -2453,8 +2464,26 @@ static void RDoom_UpdateDefaults(bool gameSection)
+ 		// 3: no busy wait on frames without a tic (see r_ticstability in d_net.cpp)
+ 		r_ticstability = false;
+ 	}
++#ifdef __SWITCH2__
++	if (rev < 4 && !gameSection)
++	{
++		// 4 (UZDoom NX2): the Switch 1 workarounds go back to UZDoom's own
++		// behaviour on the Switch 2, also in configs saved by 0.1.0
++		rd_vk_frameoverlap = false;
++		rd_dynres = false;
++		rd_vk_texevict_mb = 0;
++		rd_vk_async_textures = false;
++		rd_async_sprites = false;
++		rd_sprite_prefetch = false;
++		rd_vk_simple2d = false;
++		rd_fx_nearcull = 0.f;
++		rd_fx_nearfade = 0.f;
++	}
++	rd_defaults_rev = 4;
++#else
+ 	rd_defaults_rev = 3;
+ #endif
++#endif
+ }
+ 
+ //==========================================================================
+diff --git a/src/rendering/hwrenderer/hw_nxprefetch.cpp b/src/rendering/hwrenderer/hw_nxprefetch.cpp
+index 4877b32c62..87837734f8 100644
+--- a/src/rendering/hwrenderer/hw_nxprefetch.cpp
++++ b/src/rendering/hwrenderer/hw_nxprefetch.cpp
+@@ -72,7 +72,7 @@ static TMap<DPSprite *, FState *> NXLookahead;
+ //==========================================================================
+ 
+ #ifdef __SWITCH__
+-CVAR(Bool, rd_async_sprites, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_async_sprites, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ #else
+ CVAR(Bool, rd_async_sprites, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ #endif
+@@ -407,7 +407,7 @@ struct NXPrefetchList
+ };
+ 
+ // prefetch the pictures of every actor class when it first appears (off: only what is drawn)
+-CVAR(Bool, rd_sprite_prefetch, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, rd_sprite_prefetch, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ 
+ void NXPrefetch_Class(PClassActor *cls, int maxtextures, bool urgent)
+ {
+diff --git a/src/rendering/hwrenderer/scene/hw_sprites.cpp b/src/rendering/hwrenderer/scene/hw_sprites.cpp
+index 80b59394f0..c946feb21b 100644
+--- a/src/rendering/hwrenderer/scene/hw_sprites.cpp
++++ b/src/rendering/hwrenderer/scene/hw_sprites.cpp
+@@ -826,8 +826,8 @@ void HWSprite::PerformSpriteClipAdjustment(AActor *thing, const DVector2 &thingp
+ //==========================================================================
+ 
+ #ifdef __SWITCH__
+-CVAR(Float, rd_fx_nearcull, 20.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// map units; pure effects nearer than this are not drawn
+-CVAR(Float, rd_fx_nearfade, 48.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// they fade in up to this distance
++CVAR(Float, rd_fx_nearcull, NX_SW1_DEFAULT(20.f, 0.f), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// map units; pure effects nearer than this are not drawn
++CVAR(Float, rd_fx_nearfade, NX_SW1_DEFAULT(48.f, 0.f), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// they fade in up to this distance
+ #endif
+ 
+ void HWSprite::Process(HWDrawInfo *di, AActor* thing, sector_t * sector, area_t in_area, int thruportal, bool isSpriteShadow)
+-- 
+2.47.3
+

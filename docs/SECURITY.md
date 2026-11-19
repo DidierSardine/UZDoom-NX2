@@ -24,7 +24,7 @@ Ways a program could write:
 | System services that change the NAND (`set:sys`, `ns`, `ncm`, `es`, `btm`, album, `nifm`…) | not in the binary (symbol check) |
 | kaiHEN API (FS root, loader, plugins) | not in the binary |
 | Raw IPC (`serviceDispatch`, `smGetService`) in the port's code | forbidden by the source check |
-| Mesa's on-disk shader cache | disabled on Horizon in OunceVK; RDoom's clean-up of `sdmc:/.mesa` was removed |
+| OunceVK's on-disk shader cache (default `sdmc:/config/ouncevk`) | redirected to `switch/uzdoom-nx2/cache/ouncevk` with `MESA_SHADER_CACHE_DIR` at start-up (the first test showed the firewall refusing the default folder); RDoom's clean-up of `sdmc:/.mesa` was removed |
 
 ## 2. Layer 1 — binary check (`tests/check_nand_safety.sh`)
 
@@ -100,6 +100,7 @@ absolute under `NX2_SANDBOX_ROOT`.
 | Measurements (`nx_perf.cpp`, `rdoom_gpubench.cpp`) | `logs/perf.log`, `logs/gpu-bench.txt` |
 | Launcher (`launcher/src/core`) | `profiles/*.json` (+ `.bak`, atomic writes), `config/launcher.json`, `config/engine/<profile>.ini`, `backup/`, `export/`, `cache/` (thumbnails, `loadinfo.txt`), `logs/last-launch.txt` |
 | UZDoom engine | `config/engine/<profile>.ini`, `saves/<profile>/`, `screenshots/`, `demo/`, `cache/uzdoom/` (Vulkan pipelines, GL nodes) |
+| OunceVK (Vulkan driver) | `cache/ouncevk/` (shader cache) |
 | Loading screen | `loadtimes.txt` (load time history) |
 | UZDoom console (`logfile`, `dumpjit`…) | relative to the folder; a path outside it is refused by the firewall |
 
