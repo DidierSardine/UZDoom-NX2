@@ -1,7 +1,7 @@
 From 07538210e6f204a70a4d9ae424914608a32f9c69 Mon Sep 17 00:00:00 2001
 From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
 Date: Thu, 19 Nov 2026 21:01:54 +0100
-Subject: [PATCH 71/71] Switch 2 0.1.2: console, rumble, gyro aiming, GPU hang
+Subject: [PATCH 71/72] Switch 2 0.1.2: console, rumble, gyro aiming, GPU hang
  handling
 
 - Console: A (Switch keyboard) now runs the command. The pad buttons that

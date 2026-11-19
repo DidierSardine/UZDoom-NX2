@@ -49,8 +49,6 @@ struct InputOptions
 	float lookSensitivity = 1.0f;   // rd_joy_sensitivity
 	float deadzone = 0.15f;         // rd_joy_deadzone
 	bool invertLook = false;        // rd_joy_invert_look
-	bool gyro = true;               // nx_gyro (Switch 2: aiming with the motion sensors)
-	float gyroSensitivity = 2.5f;   // nx_gyro_sensitivity
 };
 
 struct GameplayOptions

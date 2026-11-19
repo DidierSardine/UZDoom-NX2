@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.3 (2026-11-19)
+
+From the third console test (logs and a hang.log).
+
+- **Freezes on the first frame of a level** (Freedoom: Phase 1, Brutal Doom
+  + DOOM II, BENCH 2 and 3, stuck on the loading screen): hang.log showed
+  the game thread waiting in `RenderBSP` for the `gl_multithread` worker,
+  which never ran. That worker is off by default on the Switch 2.
+- **Gyro aiming in the game's Controller Options**, off by default:
+  horizontal and vertical sensitivity (3.5 / 1.5: faster sideways, slower
+  up and down), inversion, "Level the view now". The reset button can be
+  rebound in Customize Controls > Actions (left stick click by default).
+  Smoother: the rotation is integrated sample by sample. The launcher no
+  longer has gyro settings.
+- **Rumble off by default** (haptics strength 0; Controller Options to turn
+  it on). A frozen game no longer keeps the controller vibrating.
+- **Default profiles:** only Freedoom 2 and Custom (the others needed mods
+  that are not shipped).
+- **Benchmarks:** BENCH 3 and 4 are real GPU tests now (3840x2160 internal,
+  MSAA 4x, bloom, tonemap, lens flares, shadow maps, 16x anisotropic, xBRZ
+  4x textures).
+
 ## 0.1.2 (2026-11-19)
 
 From the second console test (0.1.1: DOOM II + Reelism Gold fine).

@@ -23,8 +23,9 @@ under kaiHEN, rendered with Vulkan (OunceVK), with its own launcher.
    The language (English, French, Portuguese) is in Settings > Language.
 
 In game
-  Gyro aiming is on (profile editor: Gyro aiming / Gyro sensitivity).
-  Left stick click: level the view and reset the gyro.
+  Gyro aiming and rumble are off by default: Options > Controller Options.
+  Left stick click: level the view and reset the gyro (rebind it in
+  Customize Controls > Actions).
   Console: A types and runs a command (Switch keyboard), X erases, B closes.
 
 Launcher controls

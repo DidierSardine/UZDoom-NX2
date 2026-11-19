@@ -1,0 +1,408 @@
+From 6993fa0f023eeabe13b0fc3abe7996b272e1deba Mon Sep 17 00:00:00 2001
+From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
+Date: Thu, 19 Nov 2026 21:42:39 +0100
+Subject: [PATCH 72/72] Switch 2 0.1.3: no BSP worker deadlock, gyro and rumble
+ in the game's menus
+
+- The freezes on the first frame of a level (Freedoom: Phase 1, Brutal
+  Doom, BENCH 2/3) were the game thread waiting in RenderBSP for the
+  gl_multithread worker, which never ran (hang.log). gl_multithread is off
+  by default on the Switch 2; when turned on, the worker no longer has a
+  fixed core and its empty-queue loop yields.
+- hang.log also dumps the render worker and the process core mask.
+- Gyro aiming in Controller Options (IfOption(Switch2), LANGUAGE strings in
+  English, French and Portuguese): on/off (off by default), horizontal and
+  vertical sensitivity (3.5 / 1.5), inversion, level-the-view command; the
+  reset is bindable in Customize Controls > Actions.
+- Gyro rotation integrated sample by sample (smoother).
+- Rumble (haptics_strength) off by default on the Switch 2; the watchdog
+  stops it when frames stop (a frozen game no longer keeps vibrating).
+- Configs migrated once (rd_defaults_rev 5).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                               |  2 +-
+ src/common/engine/m_haptics.cpp              |  2 +-
+ src/common/menu/menudef.cpp                  |  6 +++
+ src/common/platform/posix/nx/i_nxsystem.cpp  |  7 +++
+ src/common/platform/posix/nx/nx2_motion.cpp  | 52 +++++++++++++-------
+ src/common/platform/posix/nx/nx_glthread.cpp | 24 +++++++--
+ src/d_main.cpp                               | 14 +++++-
+ src/rendering/hwrenderer/scene/hw_bsp.cpp    | 14 +++++-
+ wadsrc/static/language.nx2                   | 33 +++++++++++++
+ wadsrc/static/menudef.txt                    | 16 ++++++
+ 10 files changed, 145 insertions(+), 25 deletions(-)
+ create mode 100644 wadsrc/static/language.nx2
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1ce8453ce9..63782d683a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -72,7 +72,7 @@ if( NINTENDO_SWITCH )
+ 	# our gcc complains about the use of alloca, stricmp, etc without including the appropriate headers
+ 	# unless we just do this
+ 	set( CMAKE_CXX_EXTENSIONS ON )
+-	set( RDOOM_VERSION "0.1.2" )	# UZDoom NX2 version
++	set( RDOOM_VERSION "0.1.3" )	# UZDoom NX2 version
+ 	set( SWITCH_APP_VERSION "${RDOOM_VERSION}" )
+ 	# RDoom launcher sources (outside this tree so the engine stays a patch series)
+ 	set( RDOOM_LAUNCHER_DIR "${CMAKE_SOURCE_DIR}/../launcher" CACHE PATH "RDoom launcher source directory" )
+diff --git a/src/common/engine/m_haptics.cpp b/src/common/engine/m_haptics.cpp
+index d3f37cc80b..8168911b5a 100644
+--- a/src/common/engine/m_haptics.cpp
++++ b/src/common/engine/m_haptics.cpp
+@@ -116,7 +116,7 @@ CUSTOM_CVARD(Float, haptics_strength_rt, 1.0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG,
+ 	Haptics.strength.right_trigger = self * Haptics.strength.base;
+ };
+ 
+-CUSTOM_CVARD(Int, haptics_strength, 10, CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Translate linear haptics to audio taper")
++CUSTOM_CVARD(Int, haptics_strength, NX_SW1_DEFAULT(10, 0), CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "Translate linear haptics to audio taper")
+ {
+ 	double l1 = self / 10.0;
+ 	double l2 = l1 * l1;
+diff --git a/src/common/menu/menudef.cpp b/src/common/menu/menudef.cpp
+index 934df5a9ae..b6dba26cd8 100644
+--- a/src/common/menu/menudef.cpp
++++ b/src/common/menu/menudef.cpp
+@@ -239,6 +239,12 @@ static bool CheckSkipOptionBlock(FScanner &sc)
+ 				filter = true;
+ 			#endif
+ 		}
++		else if (sc.Compare("Switch2"))
++		{
++			#ifdef __SWITCH2__
++				filter = true;
++			#endif
++		}
+ 		else if (sc.Compare("unix"))
+ 		{
+ 			#ifdef __unix__
+diff --git a/src/common/platform/posix/nx/i_nxsystem.cpp b/src/common/platform/posix/nx/i_nxsystem.cpp
+index 555d6b0343..c95addccd3 100644
+--- a/src/common/platform/posix/nx/i_nxsystem.cpp
++++ b/src/common/platform/posix/nx/i_nxsystem.cpp
+@@ -284,7 +284,14 @@ void I_NXWorkerYield()
+ // thread waits. Give it core 1 and the same priority as the game.
+ void I_NXSetupRenderThread()
+ {
++#ifdef __SWITCH2__
++	// Switch 2: no fixed core (the process's cores under kaiHEN are not
++	// known for sure); the hang watchdog reports on this thread too
++	extern void NX_SetHangWatchRenderThread();
++	NX_SetHangWatchRenderThread();
++#else
+ 	svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1ULL << 1);
++#endif
+ 	svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2C);
+ }
+ 
+diff --git a/src/common/platform/posix/nx/nx2_motion.cpp b/src/common/platform/posix/nx/nx2_motion.cpp
+index 5b9e3603f2..199c562c44 100644
+--- a/src/common/platform/posix/nx/nx2_motion.cpp
++++ b/src/common/platform/posix/nx/nx2_motion.cpp
+@@ -14,11 +14,14 @@
+ ** with the console held upright, flat, with a single Joy-Con or a Pro
+ ** Controller. Pitch follows the controller's own left-right axis.
+ **
+-**   nx_gyro 1                 gyro aiming on (default) / 0 off
+-**   nx_gyro_sensitivity 2.5   1 = the view turns as much as the controller
++**   nx_gyro 0                 gyro aiming off (default) / 1 on
++**   nx_gyro_sensitivity 3.5   horizontal; 1 = the view turns as much as the controller
++**   nx_gyro_sensitivity_y 1.5 vertical
+ **   nx_gyro_invert_x/_y       flip one axis
+ **   gyro_reset                level the view and restart the gravity estimate
+-**                             (bound to the left stick click when it is free)
++**                             (bound to the left stick click when it is free;
++**                             Customize Controls > Actions to change it)
++** All of them are in the game's Controller Options.
+ **
+ ** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
+ */
+@@ -42,8 +45,11 @@
+ void G_AddViewAngle(int yaw, bool mouse);
+ void G_AddViewPitch(int look, bool mouse);
+ 
+-CVAR(Bool, nx_gyro, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+-CVAR(Float, nx_gyro_sensitivity, 2.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Bool, nx_gyro, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++// first test (2026-11-19): 2.5 on both axes was too slow horizontally and
++// too fast vertically
++CVAR(Float, nx_gyro_sensitivity, 3.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Float, nx_gyro_sensitivity_y, 1.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ CVAR(Bool, nx_gyro_invert_x, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ CVAR(Bool, nx_gyro_invert_y, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ // angular speed (turns per second) below which the gyro is ignored: hides the
+@@ -196,24 +202,33 @@ void NX2_MotionFrame()
+ 	const size_t n = hidGetSixAxisSensorStates(d.six[d.sensor], states, 17);
+ 	if (n == 0)
+ 		return;
+-	// the newest samples first: average the angular velocity of the ones not
+-	// seen yet, follow gravity with the newest acceleration
++	// The newest samples come first. The rotation is integrated sample by
++	// sample over the time each one covers (its delta_time), not as an
++	// average spread over the frame: the view then follows the hand at the
++	// sensor's own rate, without the jerks of frames that saw more or fewer
++	// samples. w holds the rotation (in turns) since the previous frame.
+ 	float w[3] = { 0, 0, 0 };
+ 	int fresh = 0;
+-	for (size_t i = 0; i < n; i++)
++	double covered = 0;
++	const bool firstRead = lastSample == 0;
++	for (size_t i = 0; i < n && !firstRead; i++)
+ 	{
+ 		if (states[i].sampling_number <= lastSample)
+ 			break;
+-		w[0] += states[i].angular_velocity.x;
+-		w[1] += states[i].angular_velocity.y;
+-		w[2] += states[i].angular_velocity.z;
++		// delta_time is in nanoseconds; ignore implausible values (and use
++		// the sensor's 200 Hz period instead)
++		double sdt = states[i].delta_time / 1e9;
++		if (!(sdt > 0.0005 && sdt < 0.05))
++			sdt = 0.005;
++		w[0] += states[i].angular_velocity.x * (float)sdt;
++		w[1] += states[i].angular_velocity.y * (float)sdt;
++		w[2] += states[i].angular_velocity.z * (float)sdt;
++		covered += sdt;
+ 		fresh++;
+ 	}
+ 	lastSample = states[0].sampling_number;
+ 	if (fresh == 0)
+ 		return;
+-	for (float &c : w)
+-		c /= fresh;
+ 
+ 	const float a[3] = { states[0].acceleration.x, states[0].acceleration.y, states[0].acceleration.z };
+ 	if (!gravityValid)
+@@ -239,8 +254,10 @@ void NX2_MotionFrame()
+ 	if (glen < 0.3f)
+ 		return;	// free fall or a bad sample
+ 	const float up[3] = { -gravity[0] / glen, -gravity[1] / glen, -gravity[2] / glen };
+-	float yawLeft = w[0] * up[0] + w[1] * up[1] + w[2] * up[2];	// turns per second
+-	float pitchUp = w[0];											// about the controller's left-right axis
++	// turns over the samples read; the dead zone works on the speed
++	const float spd = covered > 0 ? (float)(1.0 / covered) : 0.f;
++	float yawLeft = (w[0] * up[0] + w[1] * up[1] + w[2] * up[2]) * spd;	// turns per second
++	float pitchUp = w[0] * spd;												// about the controller's left-right axis
+ 
+ 	const float dz = nx_gyro_deadzone;
+ 	auto soften = [dz](float v) {
+@@ -256,9 +273,8 @@ void NX2_MotionFrame()
+ 	if (nx_gyro_invert_y) pitchUp = -pitchUp;
+ 
+ 	// G_AddViewAngle/Pitch take 1/65536 of a turn; a positive yaw turns right
+-	const double scale = 65536.0 * nx_gyro_sensitivity * dt;
+-	yawRest += -yawLeft * scale;
+-	pitchRest += pitchUp * scale;
++	yawRest += -yawLeft * covered * 65536.0 * nx_gyro_sensitivity;
++	pitchRest += pitchUp * covered * 65536.0 * nx_gyro_sensitivity_y;
+ 	const int yaw = (int)yawRest, pitch = (int)pitchRest;
+ 	yawRest -= yaw;
+ 	pitchRest -= pitch;
+diff --git a/src/common/platform/posix/nx/nx_glthread.cpp b/src/common/platform/posix/nx/nx_glthread.cpp
+index 6ef4ac200d..685fc389ce 100644
+--- a/src/common/platform/posix/nx/nx_glthread.cpp
++++ b/src/common/platform/posix/nx/nx_glthread.cpp
+@@ -49,7 +49,7 @@ static bool gEnabled;
+ static volatile int gCreatingThread;
+ static int gThreadCreateResult = -1;
+ static volatile bool gThreadRan = false;
+-static Handle gMainHandle, gWorkerHandle;
++static Handle gMainHandle, gWorkerHandle, gRenderHandle;
+ 
+ template<class T> static T &At(void *base, size_t off) { return *(T *)((char *)base + off); }
+ 
+@@ -322,13 +322,18 @@ static void WriteHangLog(double seconds)
+ {
+ 	hanglen = 0;
+ 	uint64_t now = armGetSystemTick();
+-	HangPrintf("UZDoom Switch hang report (GL driver thread on)\nno frame for %.0f s\nmodule base 0x%lx\n", seconds, (unsigned long)hModBase);
++	HangPrintf("UZDoom NX2 hang report\nno frame for %.0f s\nmodule base 0x%lx\n", seconds, (unsigned long)hModBase);
+ 	HangPrintf("status: %s\n", gStatus);
+ 	HangPrintf("driver thread ran: %d, pthread_create %d\n", (int)gThreadRan, gThreadCreateResult);
+ 	HangPrintf("game thread last step: %s (%.1f s ago)\n", (const char *)gCrumbMain, armTicksToNs(now - gCrumbMainTime) / 1e9);
+ 	HangPrintf("driver thread last step: %s (%.1f s ago)\n", (const char *)gCrumbWorker, gCrumbWorkerTime ? armTicksToNs(now - gCrumbWorkerTime) / 1e9 : -1.0);
+ 	DumpThread("game", gMainHandle);
+-	DumpThread("driver", gWorkerHandle);
++	DumpThread("render worker (gl_multithread)", gRenderHandle);
++	{
++		u64 mask = 0;
++		svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0);
++		HangPrintf("\nprocess core mask 0x%llx\n", (unsigned long long)mask);
++	}
+ 	FILE *f = fopen("hang.log", "w");
+ 	if (f)
+ 	{
+@@ -363,6 +368,14 @@ static void *WatchdogThread(void *)
+ 		// which is the opening picture that stops taking buttons.
+ 		if (!seenFrame) continue;
+ 		still++;
++#ifdef __SWITCH2__
++		// a frozen game must not leave the controller vibrating
++		if (still == 1)
++		{
++			extern void NX2_RumbleStop();
++			NX2_RumbleStop();
++		}
++#endif
+ 		if (still >= 8 && (reported == 0 || still - reported >= 30))
+ 		{
+ 			WriteHangLog(still);
+@@ -376,6 +389,11 @@ static void StartWatchdog();
+ 
+ // The thread the watchdog reports on: the engine's own thread (it runs on a
+ // big-stack thread of its own, not on the thread that starts the watchdog).
++void NX_SetHangWatchRenderThread()
++{
++	gRenderHandle = threadGetCurHandle();
++}
++
+ void NX_SetHangWatchThread()
+ {
+ 	gMainHandle = threadGetCurHandle();
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 2457e69318..a4af076f39 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -2433,6 +2433,9 @@ EXTERN_CVAR(Bool, rd_sprite_prefetch)
+ EXTERN_CVAR(Bool, rd_vk_simple2d)
+ EXTERN_CVAR(Float, rd_fx_nearcull)
+ EXTERN_CVAR(Float, rd_fx_nearfade)
++EXTERN_CVAR(Bool, gl_multithread)
++EXTERN_CVAR(Int, haptics_strength)
++EXTERN_CVAR(Bool, nx_gyro)
+ #endif
+ #endif
+ 
+@@ -2479,7 +2482,16 @@ static void RDoom_UpdateDefaults(bool gameSection)
+ 		rd_fx_nearcull = 0.f;
+ 		rd_fx_nearfade = 0.f;
+ 	}
+-	rd_defaults_rev = 4;
++	if (rev < 5 && !gameSection)
++	{
++		// 5 (UZDoom NX2 0.1.3): no BSP worker thread (it could freeze the
++		// first frame of a level); rumble and gyro off until the player
++		// turns them on in Controller Options
++		gl_multithread = false;
++		haptics_strength = 0;
++		nx_gyro = false;
++	}
++	rd_defaults_rev = 5;
+ #else
+ 	rd_defaults_rev = 3;
+ #endif
+diff --git a/src/rendering/hwrenderer/scene/hw_bsp.cpp b/src/rendering/hwrenderer/scene/hw_bsp.cpp
+index c8588478b8..128bb678a9 100644
+--- a/src/rendering/hwrenderer/scene/hw_bsp.cpp
++++ b/src/rendering/hwrenderer/scene/hw_bsp.cpp
+@@ -42,13 +42,19 @@
+ #include <immintrin.h>
+ #endif // ARCH_IA32
+ 
+-CVAR(Bool, gl_multithread, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++// Switch 2: off by default. Its worker thread could stay unscheduled while
++// the game thread waited for it, freezing the game on the first frame of a
++// level (hang.log of 2026-11-19: game thread in RenderBSP's future.wait).
++CVAR(Bool, gl_multithread, NX_SW1_DEFAULT(true, false), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ 
+ EXTERN_CVAR(Float, r_actorspriteshadowdist)
+ EXTERN_CVAR(Bool, r_radarclipper)
+ EXTERN_CVAR(Bool, r_dithertransparency)
+ 
+ thread_local bool isWorkerThread;
++#ifdef __SWITCH2__
++#include <switch.h>
++#endif
+ ctpl::thread_pool renderPool(1);
+ bool inited = false;
+ 
+@@ -136,6 +142,12 @@ void HWDrawInfo::WorkerThread()
+ 			_mm_pause();
+ 			_mm_pause();
+ #endif // ARCH_IA32
++#ifdef __SWITCH2__
++			// Horizon does not time-slice threads of equal priority: an empty
++			// queue must give the core away, or a game thread sharing it
++			// could never add the next job
++			svcSleepThread(0);
++#endif
+ 		}
+ 		// Note that the main thread MUST have prepared the fake sectors that get used below!
+ 		// This worker thread cannot prepare them itself without costly synchronization.
+diff --git a/wadsrc/static/language.nx2 b/wadsrc/static/language.nx2
+new file mode 100644
+index 0000000000..e3e0e8bc02
+--- /dev/null
++++ b/wadsrc/static/language.nx2
+@@ -0,0 +1,33 @@
++// UZDoom NX2 (Nintendo Switch 2) menu strings: gyro aiming in Controller Options.
++[default]
++NX2MNU_GYRO_TITLE = "Gyro aiming (Switch 2)";
++NX2MNU_GYRO = "Gyro aiming";
++NX2MNU_GYRO_SENS_X = "Horizontal sensitivity";
++NX2MNU_GYRO_SENS_Y = "Vertical sensitivity";
++NX2MNU_GYRO_INV_X = "Invert horizontal";
++NX2MNU_GYRO_INV_Y = "Invert vertical";
++NX2MNU_GYRO_RESET = "Level the view now";
++NX2MNU_GYRO_HINT = "Reset button: Customize Controls > Actions";
++NX2MNU_GYRO_BIND = "Reset gyro / level the view";
++
++[fr]
++NX2MNU_GYRO_TITLE = "Visée au gyroscope (Switch 2)";
++NX2MNU_GYRO = "Visée au gyroscope";
++NX2MNU_GYRO_SENS_X = "Sensibilité horizontale";
++NX2MNU_GYRO_SENS_Y = "Sensibilité verticale";
++NX2MNU_GYRO_INV_X = "Inverser l'horizontale";
++NX2MNU_GYRO_INV_Y = "Inverser la verticale";
++NX2MNU_GYRO_RESET = "Remettre la vue à niveau";
++NX2MNU_GYRO_HINT = "Touche de réinitialisation : Commandes > Actions";
++NX2MNU_GYRO_BIND = "Réinitialiser le gyro / vue à niveau";
++
++[pt_BR pt]
++NX2MNU_GYRO_TITLE = "Mira por giroscópio (Switch 2)";
++NX2MNU_GYRO = "Mira por giroscópio";
++NX2MNU_GYRO_SENS_X = "Sensibilidade horizontal";
++NX2MNU_GYRO_SENS_Y = "Sensibilidade vertical";
++NX2MNU_GYRO_INV_X = "Inverter horizontal";
++NX2MNU_GYRO_INV_Y = "Inverter vertical";
++NX2MNU_GYRO_RESET = "Nivelar a visão agora";
++NX2MNU_GYRO_HINT = "Botão de reinício: Controles > Ações";
++NX2MNU_GYRO_BIND = "Reiniciar giroscópio / nivelar a visão";
+diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
+index 60c07e85d2..37fff8b384 100644
+--- a/wadsrc/static/menudef.txt
++++ b/wadsrc/static/menudef.txt
+@@ -571,6 +571,10 @@ OptionMenu "ActionControlsMenu" protected
+ 	Control    "$CNTRLMNU_LOOKUP"           , "+lookup"
+ 	Control    "$CNTRLMNU_LOOKDOWN"         , "+lookdown"
+ 	Control    "$CNTRLMNU_CENTERVIEW"       , "centerview"
++	IfOption(Switch2)
++	{
++		Control    "$NX2MNU_GYRO_BIND"          , "gyro_reset"
++	}
+ 
+ 	StaticText ""
+ 	Control    "$CNTRLMNU_RUN"              , "+speed"
+@@ -821,6 +825,18 @@ OptionMenu "JoystickOptionsDefaults" protected
+ 	Option "$JOYMNU_ENABLE", "use_joystick", "YesNo"
+ 	Option "$JOYMNU_NOMENU", "m_blockcontrollers", "YesNo"
+ 	ScaleSlider "$JOYMNU_HAPTICS", "haptics_strength", 0, 10, 1, "$OPTVAL_OFF", 0, "m_simpleoptions_view", 0, Hide
++	IfOption(Switch2)
++	{
++		StaticText ""
++		StaticText "$NX2MNU_GYRO_TITLE", 1
++		Option "$NX2MNU_GYRO", "nx_gyro", "OnOff"
++		Slider "$NX2MNU_GYRO_SENS_X", "nx_gyro_sensitivity", 0.25, 8, 0.25, 2
++		Slider "$NX2MNU_GYRO_SENS_Y", "nx_gyro_sensitivity_y", 0.25, 8, 0.25, 2
++		Option "$NX2MNU_GYRO_INV_X", "nx_gyro_invert_x", "OnOff"
++		Option "$NX2MNU_GYRO_INV_Y", "nx_gyro_invert_y", "OnOff"
++		Command "$NX2MNU_GYRO_RESET", "gyro_reset"
++		StaticText "$NX2MNU_GYRO_HINT"
++	}
+ 	IfOption(Windows)
+ 	{
+ 		Option "$JOYMNU_DINPUT", "joy_dinput", "YesNo"
+-- 
+2.47.3
+

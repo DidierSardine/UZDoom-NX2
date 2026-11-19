@@ -1,7 +1,7 @@
 From bde93d10b4c2771324eb0e61b8c06d1f3a4df255 Mon Sep 17 00:00:00 2001
 From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
 Date: Thu, 19 Nov 2026 20:19:33 +0100
-Subject: [PATCH 70/71] Switch 2 0.1.1: fixes from the first console test
+Subject: [PATCH 70/72] Switch 2 0.1.1: fixes from the first console test
 
 - Vulkan failed to start with big mods ("out of device memory"): RDoom's
   object pool (a newlib workaround) took 128 KB-aligned slabs from

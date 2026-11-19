@@ -1,7 +1,7 @@
 From b078e1801d7c2e1a773c752c6927c09b3fb959c7 Mon Sep 17 00:00:00 2001
 From: UZDoom NX2 <uzdoom-nx2@users.noreply.local>
 Date: Wed, 18 Nov 2026 18:53:24 +0100
-Subject: [PATCH 69/71] Restore UZDoom's README; describe the Switch 2 branch
+Subject: [PATCH 69/72] Restore UZDoom's README; describe the Switch 2 branch
  in README-SWITCH2.md
 
 RDoom NX had replaced UZDoom's README (with links to donations). The

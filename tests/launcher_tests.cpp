@@ -286,7 +286,8 @@ static void TestProfilesLifecycle()
 	store.Load();
 	CHECK_EQ(store.All().size(), BuiltinTemplates().size());  // first run creates templates
 	CHECK(store.Find("freedoom2-vulkan-stock") != nullptr);
-	CHECK(FileExists(p.ProfileFile("brutal-doom")));
+	CHECK(FileExists(p.ProfileFile("custom")));
+	CHECK(store.Find("brutal-doom") == nullptr);  // no built-in profile for files that are not shipped
 	for (auto &pr : store.All())
 		CHECK(pr.video.renderer == Renderer::Vulkan);  // Vulkan is the default everywhere
 
@@ -396,12 +397,17 @@ static void TestResolveAndLaunch()
 	CHECK(r.runnable && r.iwad && r.filled.iwad == "freedoom2.wad");
 
 	// template with missing files is "pending", not runnable
-	Profile comp = MakeDefaultProfile("compendium");
+	Profile comp;
+	comp.id = "comp";
+	comp.iwadCandidates = { "doom2.wad" };
+	comp.modPatterns = { "compendium*.pk3" };
 	auto rc = ResolveProfile(comp, lib, defs);
 	CHECK(!rc.runnable && rc.pendingInstall);
 
 	// brutal template: two matches -> warning, last one picked
-	Profile bd = MakeDefaultProfile("brutaldoom");
+	Profile bd;
+	bd.id = "bd";
+	bd.modPatterns = { "brutal*.pk3" };
 	bd.iwadCandidates = { "freedoom2.wad" };
 	auto rb = ResolveProfile(bd, lib, defs);
 	CHECK(rb.runnable && rb.mods.size() == 1 && rb.filled.mods[0].file == "brutal22test6.pk3");
@@ -410,14 +416,6 @@ static void TestResolveAndLaunch()
 		if (i.level == IssueLevel::Warning)
 			warned = true;
 	CHECK(warned);
-
-	// Project Brutality template: GitHub zip name and release names, not Brutal Doom
-	Profile pb = MakeDefaultProfile("brutality");
-	CHECK_EQ(pb.id, std::string("project-brutality"));
-	CHECK(pb.modPatterns.size() == 1);
-	CHECK(GlobMatch(pb.modPatterns[0], "Project_Brutality-master.pk3"));
-	CHECK(GlobMatch(pb.modPatterns[0], "Project Brutality 3.0.pk3"));
-	CHECK(!GlobMatch(pb.modPatterns[0], "brutalv21.pk3"));
 
 	// missing dependency declared by GAMEINFO LOAD
 	Profile dep;
@@ -432,7 +430,8 @@ static void TestResolveAndLaunch()
 		{ "zscript/id24gore.zs", "class ID24LargeCorpsePile : Actor {}" }, { "zscript/id24nature.zs", "class ID24BushShort : Actor {}" } }));
 	Library lib2;
 	lib2.Scan(p, {}, {}, defs);
-	Profile wf = MakeDefaultProfile("wadfusion");
+	Profile wf;
+	wf.id = "wf";
 	wf.iwadCandidates = { "old_fusion.ipk3" };
 	auto rw = ResolveProfile(wf, lib2, defs);
 	CHECK(!rw.runnable);

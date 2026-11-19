@@ -1,12 +1,12 @@
 {
-  "app_version": "UZDoom NX2 0.1.2",
+  "app_version": "UZDoom NX2 0.1.3",
   "created": "2026-11-19T20:01:14Z",
   "modified": "2026-11-19T20:01:14Z",
   "format": "rdoom-profile",
   "version": 1,
   "id": "bench-3-frozen-time",
-  "name": "BENCH 3 - Frozen Time (GPU, High quality)",
-  "description": "DOOM II + Frozen Time MAP01 (huge open ice vistas, a classic GZDoom stress map) at High quality: bloom, light shadows, dynamic lights.",
+  "name": "BENCH 3 - Frozen Time, GPU max (4K internal)",
+  "description": "DOOM II + Frozen Time MAP01 rendered at 3840x2160 then scaled down, MSAA 4x, bloom, tonemap, lens flares, light shadow maps, 16x anisotropic, xBRZ 4x smoothed textures.",
   "template": "custom",
   "iwad": "DOOM2.WAD",
   "iwad_candidates": [],
@@ -19,7 +19,20 @@
     }
   ],
   "cvars": {
-    "vid_fps": "1"
+    "vid_fps": "1",
+    "vid_scalefactor": "2",
+    "gl_multisample": "4",
+    "gl_bloom": "1",
+    "gl_tonemap": "5",
+    "gl_lens": "1",
+    "gl_light_shadowmap": "1",
+    "gl_shadowmap_quality": "2048",
+    "r_dynlights": "1",
+    "gl_texture_filter": "6",
+    "gl_texture_filter_anisotropic": "16",
+    "gl_texture_hqresizemode": "4",
+    "gl_texture_hqresizemult": "4",
+    "r_actorspriteshadow": "2"
   },
   "gameplay": {
     "always_run": true,
@@ -31,13 +44,6 @@
     "skill": 4,
     "warp": "MAP01"
   },
-  "input": {
-    "deadzone": 0.15,
-    "invert_look": false,
-    "look_sensitivity": 1.0,
-    "gyro": true,
-    "gyro_sensitivity": 2.5
-  },
   "video": {
     "dynamic_lights": true,
     "fps_limit": 0,
@@ -46,5 +52,10 @@
     "renderer": "vulkan",
     "texture_filter": 0,
     "vsync": false
+  },
+  "input": {
+    "deadzone": 0.15,
+    "invert_look": false,
+    "look_sensitivity": 1.0
   }
 }
