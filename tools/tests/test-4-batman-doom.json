@@ -1,0 +1,51 @@
+{
+  "app_version": "UZDoom NX2 0.1.4",
+  "created": "2026-11-19T23:30:00Z",
+  "modified": "2026-11-19T23:30:00Z",
+  "format": "rdoom-profile",
+  "version": 1,
+  "id": "test-4-batman-doom",
+  "name": "TEST 4 - Batman Doom (1999)",
+  "description": "DOOM II + Batman Doom by ACE Team: a 1999 total conversion with a DeHackEd patch (batman.deh). Old-mod compatibility test.",
+  "template": "custom",
+  "iwad": "DOOM2.WAD",
+  "iwad_candidates": [],
+  "mod_patterns": [],
+  "mods": [
+    {
+      "enabled": true,
+      "file": "tests/batman.wad",
+      "optional": false
+    },
+    {
+      "enabled": true,
+      "file": "tests/batman.deh",
+      "optional": false
+    }
+  ],
+  "cvars": {},
+  "gameplay": {
+    "always_run": true,
+    "autoaim": 35.0,
+    "crosshair": 1,
+    "fast": false,
+    "no_monsters": false,
+    "respawn": false,
+    "skill": 3,
+    "warp": ""
+  },
+  "video": {
+    "dynamic_lights": true,
+    "fps_limit": 60,
+    "internal_scale": 1.0,
+    "quality": "high",
+    "renderer": "vulkan",
+    "texture_filter": 0,
+    "vsync": true
+  },
+  "input": {
+    "deadzone": 0.15,
+    "invert_look": false,
+    "look_sensitivity": 1.0
+  }
+}

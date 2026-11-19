@@ -11,9 +11,9 @@ Plays everything UZDoom loads: **.wad**, **.pk3**, **.ipk3**, **.pk7**,
 **.zip**, **.deh/.bex**. The free **Freedoom** IWADs are included, so it is
 playable right after installation.
 
-> Status: **0.1.1, early.** The first console test (0.1.0) found a black screen
-> with big mods and a GPU loss in levels; 0.1.1 fixes their causes (see
-> [CHANGELOG.md](CHANGELOG.md)) but has not been re-tested yet.
+> Status: **0.1.4, early.** Tested by one person on one console. Freedoom,
+> DOOM II and DOOM II + Brutal Doom play at about 60 fps; see
+> [Benchmarks](#benchmarks) and [CHANGELOG.md](CHANGELOG.md).
 
 The engine is the official UZDoom 5.0.3 release (tag `5.0.3`, commit
 `7910df7102033fd7754a317f3254f24101135926` of
@@ -21,38 +21,71 @@ The engine is the official UZDoom 5.0.3 release (tag `5.0.3`, commit
 `patches/`. (UZDoom is the continuation of GZDoom; a few names in the code and
 in mod compatibility notes still say GZDoom.)
 
-## Safety: zero NAND writes
+## Safe for your console
 
-kaiHEN does not restrict homebrew: a program can write to the system NAND and
-brick the console. UZDoom NX2 protects it with three independent layers
-(details: [docs/SECURITY.md](docs/SECURITY.md)):
+kaiHEN lets homebrew write anywhere, the system memory (NAND) included, where
+a bad write can brick the console. UZDoom NX2 never writes there:
 
-1. **Nothing in the binary can open the NAND.** Every build checks the final
-   ELF (statically linked, dead code removed) and rejects it if it contains any
-   function that opens a BIS partition, save data or a system storage, or that
-   changes system settings, installed content, tickets, Bluetooth pairing,
-   album, clocks or hardware (about 80 patterns), or kaiHEN's API. If the
-   check fails, the `.nro` is deleted.
-2. **SD card write firewall** (`nx2_fsguard.c`). Installed in `userAppInit`,
-   before any C++ constructor and before any file is opened: newlib's `sdmc`
-   device entry is replaced with a copy whose write operations (open for
-   writing/create/truncate, delete, rename, mkdir, rmdir, chmod, utimes,
-   links) fail with `EACCES` outside `sdmc:/switch/uzdoom-nx2`. This covers
-   all code: engine, launcher, ZMusic, SDL, the Vulkan driver. Every other
-   file system device is unmounted. If the firewall cannot be installed, the
-   program refuses to start.
-3. **Strict path policy** (`nx2_pathpolicy.c`): canonical paths, `..`, device
-   prefixes, ambiguous names (`...`, trailing dots/spaces), refused
-   characters. 54 unit tests on the PC.
+- everything it writes (settings, saves, logs, screenshots) stays in
+  `switch/uzdoom-nx2` on the SD card, and a guard refuses any write anywhere
+  else, even elsewhere on the SD card;
+- the code that could open the system memory is not even in the program
+  (checked automatically at every build);
+- if the guard cannot start, the program does not start either.
 
-The program does not need to read the NAND either, so the NAND is never
-opened at all.
+Details for developers: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Install
 
 See [docs/INSTALL.txt](docs/INSTALL.txt). In short: copy `switch/` to the root
 of the SD card, put extra IWADs in `switch/uzdoom-nx2/iwads/` and mods in
 `switch/uzdoom-nx2/mods/`, start it from hbmenu (a game started with R held).
+
+In the game, gyro aiming and rumble are in Options > Controller Options (both
+off by default).
+
+## Benchmarks
+
+Measured on a Switch 2 (docked, 1920x1080 output) from the logs of the
+console tests (`switch/uzdoom-nx2/logs/perf.log`). Average frame rates over
+the whole session, loading screens left out.
+
+| Test | Version | Result |
+|---|---|---|
+| Freedoom: Phase 2, MAP01 (vsync, 60 fps cap) | 0.1.3 | 55 fps |
+| DOOM II + Brutal Doom v21 (vsync, 60 fps cap) | 0.1.3 | 57 fps |
+| **BENCH 1**: Brutal Doom + NUTS (10,000 monsters) | 0.1.3 | ~15 fps before the fight, ~1 fps once the monsters wake up |
+| **BENCH 2**: Brutal Doom + NUTS3 (34,000 objects) | 0.1.3 | 12.5 fps before the fight, below 1 fps once they wake up |
+| **BENCH 3**: Frozen Time, 4K internal, MSAA 4x, all effects, xBRZ 4x | 0.1.3 | 27 fps |
+| **BENCH 4**: BENCH 3 + Brutal Doom | 0.1.3 | 23 fps (ran out of memory when the level restarted after a death; fixed in 0.1.4) |
+
+What limits them:
+
+- **BENCH 1 and 2 are CPU tests.** With tens of thousands of scripted
+  monsters, game logic alone takes 26 ms per frame and preparing the scene
+  49 ms. A desktop PC also slows down a lot on NUTS with Brutal Doom.
+- **BENCH 3 and 4 are GPU tests.** The game itself takes 3-7 ms per frame;
+  the rest is the GPU drawing 3840x2160 with 4x multisampling and every
+  post-process effect.
+
+The benchmark profiles, their mods and where to download them are in
+`tools/bench/` (the mods are not part of the release).
+
+### Compatibility tests
+
+Four more profiles in `tools/tests/` test the engine's features rather than
+its speed:
+
+| Profile | What it tests |
+|---|---|
+| TEST 1 - MyHouse.wad (Veddge, 2023) | UDMF maps, ACS scripting, portals, mirrors, camera textures, map changes in scripts |
+| TEST 2 - Hideous Destructor 5.0.1a | one of the heaviest ZScript mods (the script VM runs without a JIT on the console) |
+| TEST 3 - The Adventures of Square | a standalone game as IWAD: 3D floors, slopes, portals, ACS menus and cutscenes |
+| TEST 4 - Batman Doom (1999) | an old total conversion with a DeHackEd patch |
+
+When something goes wrong, the logs are in `switch/uzdoom-nx2/logs/`
+(`crash.log`, `error.log`, `engine-session.txt`, `rdoom.log`, `engine.log`,
+`perf.log`).
 
 ## Build
 
@@ -68,16 +101,6 @@ scripts/build.sh
 Produces `dist/uzdoom-nx2.nro` and `dist/UZDoom-NX2-<version>.zip` (with
 Freedoom).
 
-## What still has to be checked on the console
-
-- the switch from the launcher to the game (Vulkan presenting on the Switch 2's
-  VI2 display layer);
-- sound (SDL2's audio renderer on Switch 2);
-- controllers (Joy-Con 2, Pro Controller).
-
-Logs to send when something goes wrong: `switch/uzdoom-nx2/logs/` (`crash.log`,
-`engine-session.txt`, `rdoom.log`, `engine.log`, `engine-stderr.log`).
-
 ## Origin and changes from the Switch 1 port
 
 Based on the engine patches and launcher of **RDoom NX** by Renan (Æon)
@@ -91,7 +114,7 @@ port of UZDoom to the Switch 1. Changes for the Switch 2:
   export (debug utils, surface capabilities 2, ray tracing);
 - Switch 1 / Ryujinx workarounds removed (TPIDR_EL0 bridge, nvhost-as
   compatibility, binder and Mesa GL wraps);
-- SD firewall and NAND checks; everything under `switch/uzdoom-nx2`;
+- writes limited to `switch/uzdoom-nx2` on the SD card;
 - official UZDoom logo and colours; launcher and loading screen in English,
   French and Portuguese.
 

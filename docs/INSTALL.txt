@@ -32,15 +32,10 @@ Launcher controls
   A select   B back   L/R change profile   + launch   - edit profile
   Mod list: A enable/disable, Y move (D-Pad), X remove, + add
 
-Console safety (NAND)
-  * The program writes ONLY inside sdmc:/switch/uzdoom-nx2. A firewall,
-    installed before anything else runs, refuses every create, write,
-    delete or rename anywhere else (even elsewhere on the SD card).
-  * It never opens the NAND, system saves or system settings: those functions
-    are not even in the binary (checked at every build by
-    tests/check_nand_safety.sh).
-  * If the firewall cannot be installed, the program refuses to start.
-  * Refused writes are recorded in logs/rdoom.log ("fsguard").
+Safe for your console
+  UZDoom NX2 only writes inside sdmc:/switch/uzdoom-nx2 and never touches
+  the console's system memory (NAND). A guard refuses every write anywhere
+  else; if it cannot start, the program does not start either.
 
 Folders (everything is in switch/uzdoom-nx2/)
   iwads/ mods/            your files (never deleted)
@@ -49,7 +44,7 @@ Folders (everything is in switch/uzdoom-nx2/)
   saves/<profile>/        saves per profile
   screenshots/            in-game screenshots
   cache/                  thumbnails, Vulkan pipeline cache
-  logs/                   rdoom.log, engine.log, engine-session.txt, crash.log
+  logs/                   rdoom.log, engine.log, perf.log, crash.log, error.log
   launcher/               launcher images
   backup/ export/         safety copies and exported profiles
   licenses/               licences and credits
@@ -58,5 +53,6 @@ Clocks
   Stock console clocks only. No overclocking.
 
 If something goes wrong
-  Send the contents of switch/uzdoom-nx2/logs/ (crash.log,
-  engine-session.txt, rdoom.log, engine.log, engine-stderr.log).
+  Send the contents of switch/uzdoom-nx2/logs/ (crash.log, error.log,
+  engine-session.txt, rdoom.log, engine.log, engine-stderr.log) and
+  switch/uzdoom-nx2/hang.log if there is one.

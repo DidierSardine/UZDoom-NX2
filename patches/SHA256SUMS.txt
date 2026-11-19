@@ -70,3 +70,4 @@ a696a4d65242a21834f5f0b219076f691287e03239d8e6d09a350755773c3ab2  0069-Restore-U
 50f23e2ac74725749d644071b038388b8d8f6d8813ef078a6392061b82dab72a  0070-Switch-2-0.1.1-fixes-from-the-first-console-test.patch
 e3dd449141befd6318ddad0540c58846abea9cdcd7972a8708de4282db1c4eb3  0071-Switch-2-0.1.2-console-rumble-gyro-aiming-GPU-hang-h.patch
 d314e2de2c52452a3bbb2a0e681988038516b1d33f76bc47602d63152d5fb76d  0072-Switch-2-0.1.3-no-BSP-worker-deadlock-gyro-and-rumbl.patch
+c4ebc9c8ec47a01550dd27dd591a20164922af018f0738f06801990a5cbb9c8f  0073-Switch-2-0.1.4-no-out-of-memory-on-level-restart-xBR.patch

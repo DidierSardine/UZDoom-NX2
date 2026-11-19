@@ -67,6 +67,8 @@ scripts/test.sh           # host tests (path policy, launcher, languages, packag
 | `engine/src/common/platform/posix/nx/nx2_fsguard.c` | SD firewall (layer 2) |
 | `engine/src/common/platform/posix/nx/nx2_pathpolicy.c` | path policy (layer 3) |
 | `engine/src/common/platform/posix/nx/nx2_lang.cpp` | language of the port's screens |
+| `engine/src/common/platform/posix/nx/nx2_motion.cpp` | rumble and gyro aiming (HID) |
+| `engine/src/common/platform/posix/nx/nx2_parallel.cpp` | `parallel_for` on the process's CPU cores (xBRZ) |
 | `engine/src/common/platform/posix/nx/i_nxsystem.cpp` | entry, 16 MB stack, crash.log, fatal error without firewall |
 | `engine/src/common/platform/posix/nx/rdoom_nx.cpp` | SD layout, logs, launcher platform, writer thread |
 | `engine/src/common/platform/posix/sdl/sdlglvideo.cpp` | `VK_NN_vi_surface` 1920×1080 on the VI2 window |

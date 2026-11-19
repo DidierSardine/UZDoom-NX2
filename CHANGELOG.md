@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.4 (2026-11-19)
+
+From the fourth console test (BENCH 2, 3 and 4; logs and a hang.log).
+
+- **BENCH 4 ended on a black screen after the player's death.** Restarting
+  the level ran out of memory ("Could not allocate memory for vulkan buffer",
+  8.1 of 8.9 GB in use). Three causes, all fixed:
+  - RDoom's texture eviction and its texture warm-up budget measured memory
+    with `mallinfo()`, which reports nothing under the Switch 2's mimalloc:
+    neither ever kicked in. They now read the heap's own counters, and
+    pictures not drawn for a while lose their GPU copy once 5.5 GB are in use
+    (`rd_vk_texevict_mb`, config migrated once: `rd_defaults_rev` 6);
+  - the textures a restarted level no longer needs are destroyed before the
+    new ones are created (Vulkan only queued them until the next frame);
+  - the warm-up counted upscaled (xBRZ) pictures at their original size.
+  BENCH 4 now uses xBRZ 2x: Brutal Doom's thousands of sprite frames at 4x
+  do not fit in memory.
+- **Long pause when the level restarts after a death** (about 6 s in BENCH 3):
+  the xBRZ upscaling of every texture ran on one CPU core. It now uses all six
+  cores the system gives the game (`parallel_for` on the Switch 2).
+- The error screen's message is saved to `logs/error.log` as it says (it went
+  to the folder above), and `rdoom.log` records whether the graphics were
+  released before it.
+- `rdoom.log` records the process's CPU cores.
+- README: benchmark results, plainer safety notes. Four compatibility test
+  profiles (`tools/tests/`): MyHouse.wad, Hideous Destructor, The Adventures
+  of Square, Batman Doom.
+
 ## 0.1.3 (2026-11-19)
 
 From the third console test (logs and a hang.log).

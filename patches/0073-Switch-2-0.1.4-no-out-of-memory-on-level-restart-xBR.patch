@@ -1,0 +1,472 @@
+From 2d7011580d79f6b2fe1e5e197c42c8f58ffd6275 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Mah=C3=A9=20Audineau?= <mahe.audineau@etudiant.univ-lr.fr>
+Date: Thu, 19 Nov 2026 23:20:54 +0100
+Subject: [PATCH] Switch 2 0.1.4: no out of memory on level restart, xBRZ on
+ all CPU cores
+
+- texture eviction and warm-up budget read the heap's own counters
+  (mallinfo reports nothing under mimalloc); eviction from 5.5 GB on the
+  Switch 2 (rd_defaults_rev 6)
+- textures a restarted level no longer needs are destroyed before the new
+  ones are created
+- warm-up counts upscaled pictures at their real size
+- parallel_for on the process's CPU cores (nx2_parallel.cpp)
+- error.log goes to logs/; rdoom.log records the graphics release and the
+  process core mask
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |   2 +-
+ src/CMakeLists.txt                            |   1 +
+ src/common/engine/nx_perf.cpp                 |  22 +++
+ src/common/engine/nx_perf.h                   |   4 +
+ src/common/platform/posix/nx/nx2_parallel.cpp | 172 ++++++++++++++++++
+ src/common/platform/posix/sdl/i_system.cpp    |  10 +-
+ .../vulkan/renderer/vk_renderpass.cpp         |  18 +-
+ .../vulkan/system/vk_renderdevice.cpp         |  10 +-
+ src/common/utility/parallel_for.h             |  15 ++
+ src/d_main.cpp                                |   8 +-
+ src/rendering/hwrenderer/hw_precache.cpp      |   7 +
+ 11 files changed, 258 insertions(+), 11 deletions(-)
+ create mode 100644 src/common/platform/posix/nx/nx2_parallel.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 63782d683a..d0c24fc3fe 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -72,7 +72,7 @@ if( NINTENDO_SWITCH )
+ 	# our gcc complains about the use of alloca, stricmp, etc without including the appropriate headers
+ 	# unless we just do this
+ 	set( CMAKE_CXX_EXTENSIONS ON )
+-	set( RDOOM_VERSION "0.1.3" )	# UZDoom NX2 version
++	set( RDOOM_VERSION "0.1.4" )	# UZDoom NX2 version
+ 	set( SWITCH_APP_VERSION "${RDOOM_VERSION}" )
+ 	# RDoom launcher sources (outside this tree so the engine stays a patch series)
+ 	set( RDOOM_LAUNCHER_DIR "${CMAKE_SOURCE_DIR}/../launcher" CACHE PATH "RDoom launcher source directory" )
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index b998c52621..97fd18686b 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -442,6 +442,7 @@ set( PLAT_NX_SOURCES
+ 	common/platform/posix/nx/nx2_fsguard.c
+ 	common/platform/posix/nx/nx2_lang.cpp
+ 	common/platform/posix/nx/nx2_motion.cpp
++	common/platform/posix/nx/nx2_parallel.cpp
+ 	common/platform/posix/nx/rdoom_nx.cpp )
+ set( PLAT_OSX_SOURCES
+ 	common/platform/posix/osx/iwadpicker_cocoa.mm
+diff --git a/src/common/engine/nx_perf.cpp b/src/common/engine/nx_perf.cpp
+index 03b7352390..e633fe66af 100644
+--- a/src/common/engine/nx_perf.cpp
++++ b/src/common/engine/nx_perf.cpp
+@@ -70,6 +70,26 @@ static struct
+ #include <switch.h>
+ #include <malloc.h>
+ 
++double NXPerf_HeapInUseMB()
++{
++#ifdef __SWITCH2__
++	return (heapGetTotalSize() - heapGetFreeSize()) / 1048576.0;
++#else
++	struct mallinfo mi = mallinfo();
++	return mi.uordblks / 1048576.0;
++#endif
++}
++
++double NXPerf_HeapTotalMB()
++{
++#ifdef __SWITCH2__
++	return heapGetTotalSize() / 1048576.0;
++#else
++	struct mallinfo mi = mallinfo();
++	return mi.arena / 1048576.0;
++#endif
++}
++
+ // Memory in use: the process (heap + code + GPU buffers, all from the same
+ // pool on the Switch) and malloc's view of its heap (in use / obtained).
+ void NXPerf_MemoryText(char *buf, size_t len)
+@@ -91,6 +111,8 @@ void NXPerf_MemoryText(char *buf, size_t len)
+ #endif
+ }
+ #else
++double NXPerf_HeapInUseMB() { return 0; }
++double NXPerf_HeapTotalMB() { return 0; }
+ void NXPerf_MemoryText(char *buf, size_t len)
+ {
+ 	snprintf(buf, len, "memory: n/a");
+diff --git a/src/common/engine/nx_perf.h b/src/common/engine/nx_perf.h
+index 0ce95cf902..20e8811123 100644
+--- a/src/common/engine/nx_perf.h
++++ b/src/common/engine/nx_perf.h
+@@ -84,6 +84,10 @@ double NXPerf_LastFrameMS();
+ double NXPerf_LastSimMS();
+ double NXPerf_LastTicWaitMS();	// the last frame's wait for the next game tic
+ double NXPerf_LastAcquireMS();	// the last frame's wait for a swapchain image
++// heap in use and heap size in MB (on the Switch 2 malloc is mimalloc, whose
++// mallinfo() reports nothing: the heap's own counters are used there)
++double NXPerf_HeapInUseMB();
++double NXPerf_HeapTotalMB();
+ void NXPerf_MemoryText(char *buf, size_t len);	// "memory: process X of Y MB, malloc in use ..."
+ double NXPerf_LastTicMS();
+ // set by the game code: writes a breakdown (e.g. which actor classes cost the most) into the summary
+diff --git a/src/common/platform/posix/nx/nx2_parallel.cpp b/src/common/platform/posix/nx/nx2_parallel.cpp
+new file mode 100644
+index 0000000000..4e7145b03e
+--- /dev/null
++++ b/src/common/platform/posix/nx/nx2_parallel.cpp
+@@ -0,0 +1,172 @@
++/*
++** nx2_parallel.cpp
++** UZDoom NX2: parallel_for on the Switch 2.
++**
++** UZDoom splits its xBRZ texture upscaling (gl_texture_hqresizemode 4-6)
++** into slices with parallel_for. Without OpenMP that ran on the game thread
++** alone: with xBRZ x4, restarting a level after the player's death took
++** about 6 seconds of upscaling (fourth console test, BENCH 3).
++**
++** Helper threads, one per CPU core of the process other than the game's
++** core 0, take slices; the calling thread takes slices too and then waits
++** (blocking, not spinning) for the ones already taken. A helper that cannot
++** run (a core the system does not give us) therefore never holds anything
++** up: its slices are done by the caller. Only one parallel_for runs at a
++** time; a call while one is running (from another thread or nested) runs
++** its slices on its own thread.
++**
++** Copyright 2026 UZDoom NX2 contributors. GPLv3 (same as UZDoom).
++*/
++
++#ifdef __SWITCH2__
++
++#include <switch.h>
++#include <pthread.h>
++#include <atomic>
++#include <condition_variable>
++#include <functional>
++#include <mutex>
++#include <string>
++
++#include "rdoom_nx.h"
++
++namespace
++{
++	struct Job
++	{
++		const std::function<void(int)> *fn = nullptr;
++		int count = 0;
++		std::atomic<int> next{ 0 };
++		std::atomic<int> done{ 0 };
++	};
++
++	std::mutex callMutex;		// one parallel_for at a time
++	std::mutex mutex;			// guards the fields below
++	std::condition_variable work, finished;
++	Job *current = nullptr;
++	uint64_t generation = 0;
++	int busyHelpers = 0;		// helpers that hold a pointer to current
++	int helpers = 0;
++	bool started = false;
++
++	// Runs slices of the job until none is left.
++	void RunSlices(Job &job)
++	{
++		for (;;)
++		{
++			const int i = job.next.fetch_add(1);
++			if (i >= job.count)
++				return;
++			try
++			{
++				(*job.fn)(i);
++			}
++			catch (...)
++			{
++				// one bad slice must not take the game down
++			}
++			job.done.fetch_add(1);
++		}
++	}
++
++	void *HelperMain(void *arg)
++	{
++		const int core = (int)(intptr_t)arg;
++		// the same priority as the game thread, on its own core; if the core
++		// cannot be set the thread stays where it was created and simply
++		// runs when the caller waits
++		svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1ULL << core);
++		svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2C);
++		uint64_t seen = 0;
++		for (;;)
++		{
++			Job *job;
++			{
++				std::unique_lock<std::mutex> lock(mutex);
++				work.wait(lock, [&] { return generation != seen; });
++				seen = generation;
++				job = current;
++				if (!job)
++					continue;
++				busyHelpers++;
++			}
++			RunSlices(*job);
++			{
++				std::lock_guard<std::mutex> lock(mutex);
++				busyHelpers--;
++			}
++			finished.notify_all();
++		}
++		return nullptr;
++	}
++
++	void StartHelpers()
++	{
++		started = true;
++		u64 mask = 0;
++		if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)))
++			mask = 0;
++		std::string used;
++		for (int core = 1; core < 8 && helpers < 5; core++)
++		{
++			if (!(mask & (1ULL << core)))
++				continue;
++			pthread_attr_t attr;
++			pthread_attr_init(&attr);
++			pthread_attr_setstacksize(&attr, 256 * 1024);
++			pthread_t h;
++			if (pthread_create(&h, &attr, HelperMain, (void *)(intptr_t)core) == 0)
++			{
++				helpers++;
++				used += used.empty() ? "" : ",";
++				used += std::to_string(core);
++			}
++			pthread_attr_destroy(&attr);
++		}
++		char msg[160];
++		snprintf(msg, sizeof(msg), "process core mask 0x%llx; parallel_for helpers on cores %s",
++			(unsigned long long)mask, used.empty() ? "none" : used.c_str());
++		RDoom_SessionLog("cpu", msg);
++	}
++}
++
++void NX2_ParallelFor(int count, const std::function<void(int)> &fn)
++{
++	if (count <= 0)
++		return;
++	std::unique_lock<std::mutex> call(callMutex, std::try_to_lock);
++	if (!call.owns_lock() || count == 1)
++	{
++		for (int i = 0; i < count; i++)
++			fn(i);
++		return;
++	}
++	if (!started)
++		StartHelpers();
++	if (helpers == 0)
++	{
++		for (int i = 0; i < count; i++)
++			fn(i);
++		return;
++	}
++
++	Job job;
++	job.fn = &fn;
++	job.count = count;
++	{
++		std::lock_guard<std::mutex> lock(mutex);
++		current = &job;
++		generation++;
++	}
++	work.notify_all();
++	RunSlices(job);
++	{
++		// every slice is taken: wait for the ones still running, then make
++		// sure no helper still holds the job before it goes out of scope
++		std::unique_lock<std::mutex> lock(mutex);
++		current = nullptr;
++		finished.wait(lock, [&] { return job.done.load() >= job.count && busyHelpers == 0; });
++	}
++}
++
++#endif // __SWITCH2__
+diff --git a/src/common/platform/posix/sdl/i_system.cpp b/src/common/platform/posix/sdl/i_system.cpp
+index c22785d22f..26f7fe6f46 100644
+--- a/src/common/platform/posix/sdl/i_system.cpp
++++ b/src/common/platform/posix/sdl/i_system.cpp
+@@ -151,6 +151,8 @@ void Unix_I_FatalError(const char* errortext)
+ 
+ #ifdef __SWITCH__
+ #include "version.h"
++#include <string>
++#include "../nx/rdoom_nx.h"
+ void I_NXShowFatalError(const char *title, const char *message);
+ 
+ void I_ShutdownGraphics();
+@@ -165,12 +167,18 @@ void Switch_I_FatalError(const char* message)
+ 	try
+ 	{
+ 		I_ShutdownGraphics();
++		RDoom_SessionLog("fatal", "graphics released for the error screen");
++	}
++	catch (const std::exception &e)
++	{
++		RDoom_SessionLog("fatal", (std::string("releasing graphics failed: ") + e.what()).c_str());
+ 	}
+ 	catch (...)
+ 	{
++		RDoom_SessionLog("fatal", "releasing graphics failed");
+ 	}
+ 	SDL_Quit();
+-	FILE *f = fopen("error.log", "w");
++	FILE *f = fopen(RDOOM_SD_ROOT "/logs/error.log", "w");
+ 	if (f)
+ 	{
+ 		fprintf(f, "FATAL ERROR:\n%s\n", message);
+diff --git a/src/common/rendering/vulkan/renderer/vk_renderpass.cpp b/src/common/rendering/vulkan/renderer/vk_renderpass.cpp
+index 497b842f61..9af6566fa7 100644
+--- a/src/common/rendering/vulkan/renderer/vk_renderpass.cpp
++++ b/src/common/rendering/vulkan/renderer/vk_renderpass.cpp
+@@ -46,6 +46,8 @@
+ #include <malloc.h>
+ #include "c_cvars.h"
+ // memory the texture warm-up may fill at the start of a map (newest pictures first)
++EXTERN_CVAR(Int, gl_texture_hqresizemode)
++EXTERN_CVAR(Int, gl_texture_hqresizemult)
+ CVAR(Int, rd_vk_texwarm_mb, 256, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ #endif
+ #include "gamestate.h"
+@@ -336,14 +338,22 @@ void VkRenderPassManager::PrecacheListedTextures()
+ 	// (every weapon and monster frame seen in any map), all loaded at the
+ 	// start of each map; with what the map itself then loaded, the heap ran
+ 	// out after ~11 minutes ("Could not realloc 24263712 bytes").
+-	struct mallinfo mi = mallinfo();
+-	const double inUseMB = mi.uordblks / 1048576.0;
++	const double inUseMB = NXPerf_HeapInUseMB();
+ 	double budget = std::max(0, (int)rd_vk_texwarm_mb) * 1048576.0;
+ 	// Already a big game (above 1.8 GB, the usual state after the first map
+ 	// of Project Brutality): only the big HUD pictures, 64 MB at most. Read
+ 	// and decoded when first shown, PB's radiation suit visor (1472x2160)
+ 	// held the game up for 313 ms on the console.
++	// Switch 2: half of the heap (about 4.4 GB). Its mallinfo() reports
++	// nothing, so before 0.1.4 this never triggered (BENCH 4: out of memory
++	// when the level restarted after the player's death).
++#ifdef __SWITCH2__
++	const bool hudOnly = inUseMB > NXPerf_HeapTotalMB() * 0.5;
++#else
+ 	const bool hudOnly = inUseMB > 1800;
++#endif
++	// upscaled pictures (xBRZ and the like) take mult x mult times the room
++	const int upscale = gl_texture_hqresizemode > 0 ? std::max(1, (int)gl_texture_hqresizemult) : 1;
+ 	if (hudOnly)
+ 		budget = std::min(budget, 64 * 1048576.0);
+ 	mTexWarming = true;
+@@ -358,7 +368,9 @@ void VkRenderPassManager::PrecacheListedTextures()
+ 		if (!tex || !tex->isValid())
+ 			continue;
+ 		// RGBA8 on the GPU plus a third for mipmaps
+-		const double size = double(tex->GetTexelWidth()) * tex->GetTexelHeight() * 4 * 4 / 3;
++		double size = double(tex->GetTexelWidth()) * tex->GetTexelHeight() * 4 * 4 / 3;
++		if (t.ScaleFlags & CTF_Upscale)
++			size *= upscale * upscale;
+ 		if (hudOnly)
+ 		{
+ 			const ETextureType ut = tex->GetUseType();
+diff --git a/src/common/rendering/vulkan/system/vk_renderdevice.cpp b/src/common/rendering/vulkan/system/vk_renderdevice.cpp
+index 39a13e9fab..8cc0a5528c 100644
+--- a/src/common/rendering/vulkan/system/vk_renderdevice.cpp
++++ b/src/common/rendering/vulkan/system/vk_renderdevice.cpp
+@@ -725,7 +725,9 @@ uint64_t RDoom_VkFrameNumber = 0;
+ // show up). Project Brutality + WadFusion on the console: every monster,
+ // gore and weapon frame seen stayed on the GPU until the heap ran out after
+ // ~11 minutes ("Could not realloc 24263712 bytes").
+-CVAR(Int, rd_vk_texevict_mb, NX_SW1_DEFAULT(2300, 0), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++// Switch 2: 5500 of its ~8950 MB (BENCH 4, Brutal Doom with xBRZ x4 at 4K,
++// ran out of memory when the level restarted at about 6.2 GB in use).
++CVAR(Int, rd_vk_texevict_mb, NX_SW1_DEFAULT(2300, 5500), CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ // pictures losing their GPU copy per frame. Destroying an image costs about
+ // 0.23 ms on the console (845 ms for 3682 in one frame); 1.1.2/1.1.3 freed
+ // them all at once and froze the game for 0.1-1.3 s every 30 s.
+@@ -760,16 +762,14 @@ void VulkanRenderDevice::EvictStaleTextures()
+ 	{
+ 		if (evictQueue.Size() > 0)
+ 		{
+-			struct mallinfo mi = mallinfo();
+ 			NXPerf_Note("texture eviction: %u pictures lost their GPU copy over %.1f s, heap in use %.0f -> %.0f MB",
+-				evictDone, (NXPerf_NowMS() - evictStartTime) / 1000.0, evictStartHeap, mi.uordblks / 1048576.0);
++				evictDone, (NXPerf_NowMS() - evictStartTime) / 1000.0, evictStartHeap, NXPerf_HeapInUseMB());
+ 			evictQueue.Clear();
+ 			evictNext = 0;
+ 		}
+ 		if ((RDoom_VkFrameNumber % 300) != 0)
+ 			return;
+-		struct mallinfo mi = mallinfo();
+-		const double inUse = mi.uordblks / 1048576.0;
++		const double inUse = NXPerf_HeapInUseMB();
+ 		if (inUse < limit)
+ 			return;
+ 		// 30 seconds unseen, a scan (5-9 ms with Project Brutality) at most
+diff --git a/src/common/utility/parallel_for.h b/src/common/utility/parallel_for.h
+index 246737cfd7..84444558cc 100644
+--- a/src/common/utility/parallel_for.h
++++ b/src/common/utility/parallel_for.h
+@@ -45,6 +45,21 @@ inline void parallel_for(const Index first, const Index last, const Index step,
+ 	});
+ }
+ 
++#elif defined __SWITCH2__
++
++// UZDoom NX2: helper threads on the other CPU cores (nx2_parallel.cpp)
++#include <functional>
++void NX2_ParallelFor(int count, const std::function<void(int)> &fn);
++
++template <typename Index, typename Function>
++inline void parallel_for(const Index first, const Index last, const Index step, const Function& function)
++{
++	if (last <= first || step <= 0)
++		return;
++	const int count = (int)((last - first + step - 1) / step);
++	NX2_ParallelFor(count, [&](int slice) { function(first + (Index)slice * step); });
++}
++
+ #else // Generic loop with optional OpenMP parallelization
+ 
+ template <typename Index, typename Function>
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index a4af076f39..bf4e67678e 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -2491,7 +2491,13 @@ static void RDoom_UpdateDefaults(bool gameSection)
+ 		haptics_strength = 0;
+ 		nx_gyro = false;
+ 	}
+-	rd_defaults_rev = 5;
++	if (rev < 6 && !gameSection)
++	{
++		// 6 (UZDoom NX2 0.1.4): pictures not seen for a while lose their GPU
++		// copy once the heap is well filled (out of memory in BENCH 4)
++		rd_vk_texevict_mb = 5500;
++	}
++	rd_defaults_rev = 6;
+ #else
+ 	rd_defaults_rev = 3;
+ #endif
+diff --git a/src/rendering/hwrenderer/hw_precache.cpp b/src/rendering/hwrenderer/hw_precache.cpp
+index 906b21d150..7637446a7c 100644
+--- a/src/rendering/hwrenderer/hw_precache.cpp
++++ b/src/rendering/hwrenderer/hw_precache.cpp
+@@ -271,6 +271,13 @@ void hw_PrecacheTexture(uint8_t *texhitlist, TMap<PClassActor*, bool> &actorhitl
+ 	{
+ 		paira->Key->CleanUnused();
+ 	}
++#ifdef __SWITCH2__
++	// Vulkan only queues the images released above: they are destroyed once
++	// the GPU has finished with them. Do it now, before the new level's
++	// pictures take their room (BENCH 4: Brutal Doom with xBRZ x4 at 4K ran
++	// out of memory when the level restarted after the player's death).
++	screen->WaitForCommands(false);
++#endif
+ 
+ 	if (gl_precache)
+ 	{
+-- 
+2.47.3
+

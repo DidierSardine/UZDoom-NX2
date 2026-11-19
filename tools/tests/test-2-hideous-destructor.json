@@ -1,0 +1,46 @@
+{
+  "app_version": "UZDoom NX2 0.1.4",
+  "created": "2026-11-19T23:30:00Z",
+  "modified": "2026-11-19T23:30:00Z",
+  "format": "rdoom-profile",
+  "version": 1,
+  "id": "test-2-hideous-destructor",
+  "name": "TEST 2 - Hideous Destructor",
+  "description": "DOOM II + Hideous Destructor 5.0.1a: one of the heaviest ZScript mods (UZDoom's script VM has no JIT on the console). Slow start, many controls: bind reload, zoom and the user keys first.",
+  "template": "custom",
+  "iwad": "DOOM2.WAD",
+  "iwad_candidates": [],
+  "mod_patterns": [],
+  "mods": [
+    {
+      "enabled": true,
+      "file": "tests/hd-5.0.1a.pk7",
+      "optional": false
+    }
+  ],
+  "cvars": {},
+  "gameplay": {
+    "always_run": true,
+    "autoaim": 35.0,
+    "crosshair": 1,
+    "fast": false,
+    "no_monsters": false,
+    "respawn": false,
+    "skill": 3,
+    "warp": ""
+  },
+  "video": {
+    "dynamic_lights": true,
+    "fps_limit": 60,
+    "internal_scale": 1.0,
+    "quality": "high",
+    "renderer": "vulkan",
+    "texture_filter": 0,
+    "vsync": true
+  },
+  "input": {
+    "deadzone": 0.15,
+    "invert_look": false,
+    "look_sensitivity": 1.0
+  }
+}
