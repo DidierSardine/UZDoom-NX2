@@ -3,10 +3,12 @@
 UZDoom NX2 is based on RDoom NX by Renan (Æon) (GPLv3, github.com/aeon1911/RDoom-NX).
 
 UZDoom NX2 is distributed under the **GNU General Public License v3** (the licence
-of UZDoom, on which it is based). The full text is in `engine/LICENSE`
-(packaged as `switch/uzdoom-nx2/licenses/GPL-3.0-UZDoom.txt`). The complete source
-code, including every RDoom and UZDoom NX2 change, is in this repository: `engine/` (UZDoom
-5.0.3 plus the patch series in `patches/`), `launcher/`, `scripts/`.
+of UZDoom, on which it is based). The full text is included in this repository as `LICENSE` (and packaged as
+`switch/uzdoom-nx2/licenses/GPL-3.0-UZDoom.txt`). The `engine/` checkout is
+reconstructed locally and ignored by Git. Its exact upstream base revision and
+the complete RDoom NX / UZDoom NX2 patch series are published in `patches/`;
+see `patches/README.md` and `docs/BUILD.md` to recreate it. The launcher, build
+scripts, and project documentation are tracked here.
 
 UZDoom NX2 is an unofficial port. It is not a product of id Software, Bethesda,
 ZeniMax, Nintendo, or the UZDoom/GZDoom maintainers. "Doom" is a trademark of

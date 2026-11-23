@@ -1,58 +1,71 @@
-UZDoom NX2 - installation (Nintendo Switch 2, kaiHEN)
-====================================================
+UZDoom NX2 - Installation and Usage
+===================================
 
-UZDoom NX2 is an unofficial port of UZDoom 5.0.3 to the Nintendo Switch 2
-under kaiHEN, rendered with Vulkan (OunceVK), with its own launcher.
+Requirements
+------------
 
-1. Copy the "switch" folder of this package to the ROOT of the SD card.
-   Result: sdmc:/switch/uzdoom-nx2/uzdoom-nx2.nro with the .pk3 files next to
-   it, and the free Freedoom IWADs in sdmc:/switch/uzdoom-nx2/iwads/.
+- A Nintendo Switch 2 setup that supports kaiHEN homebrew and hbmenu.
+- An SD card with enough free space for the package, IWADs, and mods.
+- A UZDoom NX2 release package.
 
-2. Optional: add your own IWADs to  sdmc:/switch/uzdoom-nx2/iwads/
-   (doom.wad, doom2.wad, plutonia.wad, tnt.wad, heretic.wad, hexen.wad ...
-   from games you own).
+Install to the SD card
+----------------------
 
-3. Optional: put mods and map packs in  sdmc:/switch/uzdoom-nx2/mods/
-   (.pk3 .wad .zip .pk7 .deh .bex .ipk3; subfolders allowed)
+1. Extract the release ZIP.
+2. Copy its `switch` folder to the root of the SD card. The program should be at:
+   sdmc:/switch/uzdoom-nx2/uzdoom-nx2.nro
+3. The package includes Freedoom Phase 1 and Phase 2 in:
+   sdmc:/switch/uzdoom-nx2/iwads/
+4. Safely eject the SD card and insert it into the console.
 
-4. Start kaiHEN, then start a game while holding R to open hbmenu, and choose
-   UZDoom NX2. (The homebrew then runs in the game's process, with all its
-   memory.)
+Launch
+------
 
-5. In the launcher: choose a profile (L/R), check the IWAD and mods, press +.
-   The language (English, French, Portuguese) is in Settings > Language.
+1. Start kaiHEN.
+2. Open hbmenu by holding R while launching a game.
+3. Select UZDoom NX2.
+4. In the launcher, select a profile with L/R, review its IWAD and mod load order, then press + to launch.
 
-In game
-  Gyro aiming and rumble are off by default: Options > Controller Options.
-  Left stick click: level the view and reset the gyro (rebind it in
-  Customize Controls > Actions).
-  Console: A types and runs a command (Switch keyboard), X erases, B closes.
+Use your own legally obtained IWADs by copying them into:
+sdmc:/switch/uzdoom-nx2/iwads/
+
+Place mods and map packs in:
+sdmc:/switch/uzdoom-nx2/mods/
+
+Supported mod file types include .pk3, .wad, .zip, .pk7, .deh, .bex, and .ipk3. Subfolders are allowed. Files in these folders are user-managed and are not removed when a profile changes.
 
 Launcher controls
-  A select   B back   L/R change profile   + launch   - edit profile
-  Mod list: A enable/disable, Y move (D-Pad), X remove, + add
+-----------------
 
-Safe for your console
-  UZDoom NX2 only writes inside sdmc:/switch/uzdoom-nx2 and never touches
-  the console's system memory (NAND). A guard refuses every write anywhere
-  else; if it cannot start, the program does not start either.
+- A: select
+- B: go back
+- L/R: switch profile
+- +: launch
+- -: edit the selected profile
+- In the mod list: A toggles a mod, Y changes its position, X removes it from the profile, and + adds a mod
 
-Folders (everything is in switch/uzdoom-nx2/)
-  iwads/ mods/            your files (never deleted)
-  profiles/               profiles (.json)
-  config/engine/          engine settings per profile
-  saves/<profile>/        saves per profile
-  screenshots/            in-game screenshots
-  cache/                  thumbnails, Vulkan pipeline cache
-  logs/                   rdoom.log, engine.log, perf.log, crash.log, error.log
-  launcher/               launcher images
-  backup/ export/         safety copies and exported profiles
-  licenses/               licences and credits
+In-game settings
+----------------
 
-Clocks
-  Stock console clocks only. No overclocking.
+- Change the launcher language in Settings > Language.
+- Gyro aiming and rumble are off by default. Configure them under Options > Controller Options.
+- The left-stick click levels the view and resets gyro aiming by default. Rebind it under Customize Controls > Actions.
+- In the console, A types or runs a command, X erases, and B closes the keyboard.
 
-If something goes wrong
-  Send the contents of switch/uzdoom-nx2/logs/ (crash.log, error.log,
-  engine-session.txt, rdoom.log, engine.log, engine-stderr.log) and
-  switch/uzdoom-nx2/hang.log if there is one.
+Files and troubleshooting
+------------------------
+
+The application stores configuration, saves, screenshots, caches, and logs under:
+sdmc:/switch/uzdoom-nx2/
+
+Logs are stored in the logs/ subfolder. If reporting a problem, include relevant files such as crash.log, error.log, engine-session.txt, rdoom.log, engine.log, and perf.log. Review logs before sharing them and remove any personal information.
+
+Known compatibility issue
+-------------------------
+
+Some mods are not functional yet, such as myhouse.wad. Mods such as Brutal Doom and Reelism have been tested and work.
+
+Clock settings
+--------------
+
+UZDoom NX2 does not overclock the console. It uses the console's stock clock settings.
