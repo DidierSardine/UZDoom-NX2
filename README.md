@@ -21,6 +21,12 @@ Some mods are not functional yet, such as myhouse.wad. Mods such as Brutal Doom 
 
 Commercial IWADs and third-party mods are not included. Add only files you are entitled to use.
 
+## Switch 2 features
+
+You can use the Gyroscope to aim. The setting is in Controller Options.
+
+The Haptics also work as well !
+
 ## Install and play
 
 For SD card setup, launch steps, and controls, see [Installation and usage](docs/INSTALL.txt).
